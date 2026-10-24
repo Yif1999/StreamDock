@@ -27,21 +27,21 @@ public final class OBSClient {
         public var id: String { "\(scene)\u{1f}\(itemID)" }
     }
     public private(set) var connection: Connection = .offline("尚未连接 OBS")
-    public private(set) var scenes: [String] = []
-    public private(set) var audioInputs: [String] = []
-    public private(set) var sceneItems: [SceneItem] = []
-    public private(set) var hotkeys: [String] = []
-    public private(set) var programScene = ""
-    public private(set) var previewScene = ""
-    public private(set) var inputMute: [String: Bool] = [:]
-    public private(set) var recording: Bool?
-    public private(set) var recordPaused: Bool?
-    public private(set) var streaming: Bool?
-    public private(set) var studio: Bool?
-    public private(set) var replayActive: Bool?
-    public private(set) var virtualCamera: Bool?
-    public private(set) var recordTime = ""
-    public private(set) var streamTime = ""
+    /// Everything read from OBS; see `OBSState` for how it is kept current.
+    private(set) var state = OBSState()
+    public var scenes: [String] { state.scenes }
+    public var audioInputs: [String] { state.audioInputs }
+    public var sceneItems: [SceneItem] { state.sceneItems }
+    public var hotkeys: [String] { state.hotkeys }
+    public var programScene: String { state.programScene }
+    public var previewScene: String { state.previewScene }
+    public var inputMute: [String: Bool] { state.inputMute }
+    public var recording: Bool? { state.recording }
+    public var recordPaused: Bool? { state.recordPaused }
+    public var streaming: Bool? { state.streaming }
+    public var studio: Bool? { state.studio }
+    public var replayActive: Bool? { state.replayActive }
+    public var virtualCamera: Bool? { state.virtualCamera }
     public private(set) var busy = false
     public private(set) var actionError: String?
     public private(set) var lastActionSlot: Int?
@@ -62,12 +62,15 @@ public final class OBSClient {
         onOutputsChange?(state)
     }
     @ObservationIgnored private var sessionTask: Task<Void, Never>?
-    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    @ObservationIgnored private var syncTask: Task<Void, Never>?
     @ObservationIgnored private var socket: URLSessionWebSocketTask?
     @ObservationIgnored private var sessionID = UUID()
     @ObservationIgnored private var pending: [String: Pending] = [:]
-    @ObservationIgnored private var refreshing = false
-    @ObservationIgnored private var dirty = true
+    /// Parts of `state` waiting to be (re)loaded.
+    @ObservationIgnored private var pendingParts: Set<OBSState.Part> = []
+    /// A part with no news (event or read) for this long is read back, in case an event was missed.
+    static let verifyAfter: Duration = .seconds(10)
+    @ObservationIgnored private var verification = OBSVerification(quiet: verifyAfter)
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let configurationProvider: () throws -> OBSLocalConfiguration
     private struct Pending {
@@ -98,7 +101,7 @@ public final class OBSClient {
         defaults.set(try? JSONEncoder().encode(bindings), forKey: "obsBindings")
         actionError = nil
         lastSuccessSlot = nil
-        dirty = true
+        if binding.action == .sourceVisibility { pendingParts.insert(.sceneItems) }
         onChange?()
     }
 
@@ -178,17 +181,17 @@ public final class OBSClient {
                     handshakeTimeout.cancel()
                     connection = .ready
                     obsLog.notice("Connected and authenticated to local OBS")
-                    dirty = true
                     onChange?()
-                    refreshTask = Task { [weak self] in
-                        var tick = 0
-                        while let self, !Task.isCancelled, self.sessionID == token {
-                            if self.dirty || tick % 4 == 0 { await self.refresh(token: token) }
-                            tick += 1
-                            do { try await Task.sleep(for: .milliseconds(500)) } catch { return }
-                        }
+                    startSync(token: token)
+                case 5:
+                    guard let type = message.d["eventType"]?.string else { continue }
+                    let before = state
+                    pendingParts.formUnion(state.apply(event: type, data: message.d["eventData"]?.object ?? [:]))
+                    verification.heard(OBSState.Part.allCases.filter { state.revision($0) != before.revision($0) }, at: .now)
+                    if state != before {
+                        publishOutputs()
+                        onChange?()
                     }
-                case 5: dirty = true
                 case 7:
                     guard let id = message.d["requestId"]?.string, let waiting = pending.removeValue(forKey: id) else { continue }
                     waiting.timeout.cancel()
@@ -210,17 +213,15 @@ public final class OBSClient {
 
     private func tearDown() {
         sessionID = UUID()
-        refreshTask?.cancel()
-        refreshTask = nil
+        syncTask?.cancel()
+        syncTask = nil
         socket?.cancel(with: .goingAway, reason: nil)
         socket = nil
         let waiting = pending.values
         pending.removeAll()
         for item in waiting { item.timeout.cancel(); item.continuation.resume(throwing: Failure.unavailable) }
-        refreshing = false
-        recording = nil; recordPaused = nil; streaming = nil; studio = nil; replayActive = nil; virtualCamera = nil
-        inputMute = [:]; sceneItems = []; scenes = []; audioInputs = []; hotkeys = []
-        programScene = ""; previewScene = ""; recordTime = ""; streamTime = ""
+        pendingParts = []
+        state = OBSState()
         actionError = nil; lastSuccessSlot = nil
         publishOutputs()
     }
@@ -252,61 +253,86 @@ public final class OBSClient {
         }
     }
 
-    private func refresh(token: UUID) async {
-        guard !refreshing, connection == .ready else { return }
-        refreshing = true
-        dirty = false
-        defer { if sessionID == token { refreshing = false; onChange?() } }
-        do {
-            let sceneData = try await request("GetSceneList")
-            guard sessionID == token else { return }
-            scenes = (sceneData["scenes"]?.array ?? []).compactMap { $0.object?["sceneName"]?.string }
-            programScene = sceneData["currentProgramSceneName"]?.string ?? ""
-            previewScene = sceneData["currentPreviewSceneName"]?.string ?? ""
+    /// Loads every part once, then whatever events ask for, plus any part that has been quiet
+    /// for `verifyAfter` (see `OBSVerification`).
+    private func startSync(token: UUID) {
+        pendingParts = Set(OBSState.Part.allCases)
+        verification = OBSVerification(quiet: Self.verifyAfter)
+        syncTask = Task { [weak self] in
+            while let self, !Task.isCancelled, self.sessionID == token {
+                self.pendingParts.formUnion(self.verification.due(at: .now))
+                if !self.pendingParts.isEmpty { await self.load(token: token) }
+                do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+            }
+        }
+    }
+
+    private func load(token: UUID) async {
+        let parts = pendingParts.sorted()
+        pendingParts = []
+        for part in parts {
+            let revision = state.revision(part)
+            defer { if sessionID == token { verification.heard([part], at: .now) } }
+            do {
+                var loaded = state
+                try await read(part, into: &loaded)
+                guard sessionID == token else { return }
+                // An event touched this part while the request was out: the answer may be
+                // older than the event, so ask again instead of overwriting it.
+                guard state.revision(part) == revision else { pendingParts.insert(part); continue }
+                let before = state
+                state.adopt(part, from: loaded)
+                if state != before { publishOutputs(); onChange?() }
+            } catch {
+                guard sessionID == token else { return }
+                obsLog.notice("Reading \(String(describing: part), privacy: .public) failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    /// Reads one part from OBS into `target` (a copy of `state`; only that part is adopted).
+    private func read(_ part: OBSState.Part, into target: inout OBSState) async throws {
+        switch part {
+        case .scenes:
+            let data = try await request("GetSceneList")
+            target.scenes = (data["scenes"]?.array ?? []).compactMap { $0.object?["sceneName"]?.string }
+            target.programScene = data["currentProgramSceneName"]?.string ?? ""
+            target.previewScene = data["currentPreviewSceneName"]?.string ?? ""
+        case .outputs:
             let record = try await request("GetRecordStatus")
-            guard sessionID == token else { return }
-            recording = record["outputActive"]?.bool; recordPaused = record["outputPaused"]?.bool
-            recordTime = record["outputTimecode"]?.string ?? ""
+            target.recording = record["outputActive"]?.bool; target.recordPaused = record["outputPaused"]?.bool
+            target.recordTime = record["outputTimecode"]?.string ?? ""
             let stream = try await request("GetStreamStatus")
-            guard sessionID == token else { return }
-            streaming = stream["outputActive"]?.bool; streamTime = stream["outputTimecode"]?.string ?? ""
-            publishOutputs()
-            let mode = try await request("GetStudioModeEnabled")
-            guard sessionID == token else { return }
-            studio = mode["studioModeEnabled"]?.bool
-            let replay = try? await request("GetReplayBufferStatus")
-            guard sessionID == token else { return }
-            replayActive = replay?["outputActive"]?.bool
-            let camera = try? await request("GetVirtualCamStatus")
-            guard sessionID == token else { return }
-            virtualCamera = camera?["outputActive"]?.bool
+            target.streaming = stream["outputActive"]?.bool; target.streamTime = stream["outputTimecode"]?.string ?? ""
+            target.studio = try await request("GetStudioModeEnabled")["studioModeEnabled"]?.bool
+            // Unavailable when the replay buffer or virtual camera is not set up.
+            target.replayActive = (try? await request("GetReplayBufferStatus"))?["outputActive"]?.bool
+            target.virtualCamera = (try? await request("GetVirtualCamStatus"))?["outputActive"]?.bool
+        case .inputs:
             let inputs = try await request("GetInputList")
             var muted: [String: Bool] = [:]
             var audio: [String] = []
+            // Only inputs with audio answer GetInputMute.
             for name in (inputs["inputs"]?.array ?? []).compactMap({ $0.object?["inputName"]?.string }) {
-                if let response = try? await request("GetInputMute", ["inputName": .string(name)]), let value = response["inputMuted"]?.bool {
+                if let value = (try? await request("GetInputMute", ["inputName": .string(name)]))?["inputMuted"]?.bool {
                     muted[name] = value; audio.append(name)
                 }
-                guard sessionID == token else { return }
             }
-            inputMute = muted; audioInputs = audio
+            target.inputMute = muted; target.audioInputs = audio
+        case .sceneItems:
             var items: [SceneItem] = []
-            let wantedScenes = Set([programScene] + bindings.filter { $0.action == .sourceVisibility }.map(\.scene)).filter { !$0.isEmpty }
-            for scene in wantedScenes {
+            let wanted = Set([state.programScene] + bindings.filter { $0.action == .sourceVisibility }.map(\.scene)).filter { !$0.isEmpty }
+            for scene in wanted.sorted() {
                 guard let response = try? await request("GetSceneItemList", ["sceneName": .string(scene)]) else { continue }
-                guard sessionID == token else { return }
                 items += (response["sceneItems"]?.array ?? []).compactMap { value in
                     guard let item = value.object, let name = item["sourceName"]?.string,
                           let id = item["sceneItemId"]?.number, let enabled = item["sceneItemEnabled"]?.bool else { return nil }
                     return SceneItem(scene: scene, itemID: Int(id), name: name, enabled: enabled)
                 }
             }
-            sceneItems = items
-            let keys = try? await request("GetHotkeyList")
-            guard sessionID == token else { return }
-            hotkeys = (keys?["hotkeys"]?.array ?? []).compactMap(\.string)
-        } catch {
-            if sessionID == token { dirty = true }
+            target.sceneItems = items
+        case .hotkeys:
+            target.hotkeys = (try await request("GetHotkeyList")["hotkeys"]?.array ?? []).compactMap(\.string)
         }
     }
 
@@ -373,9 +399,8 @@ public final class OBSClient {
                 _ = try await request(command.type, command.data)
                 guard sessionID == token else { return }
                 obsLog.notice("Key \(slot + 1) succeeded: \(command.type, privacy: .public)")
+                // The new state arrives as OBS's own event.
                 lastSuccessSlot = slot
-                dirty = true
-                await refresh(token: token)
             } catch {
                 if sessionID == token {
                     actionError = error.localizedDescription

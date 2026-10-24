@@ -13,7 +13,10 @@ struct WakeKeyGate {
     mutating func reset() { consumed.removeAll(); wakeGraceUntil = -.infinity }
     mutating func route(_ event: DockInputEvent, asleep: Bool, at time: TimeInterval = ProcessInfo.processInfo.systemUptime) -> (consume: Bool, wake: Bool) {
         if !event.pressed {
-            return (consumed.remove(event.key) != nil || asleep, false)
+            let knownPress = consumed.remove(event.key) != nil
+            // M18 firmware can consume the wake press and report only its release.
+            // A key held before sleep must still release without waking the Mac.
+            return (knownPress || asleep, asleep && !knownPress)
         }
         if consumed.contains(event.key) { return (true, false) }
         if asleep || time < wakeGraceUntil {

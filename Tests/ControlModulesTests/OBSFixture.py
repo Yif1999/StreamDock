@@ -1,5 +1,12 @@
-"""Local authenticated obs-websocket fixture. Never connects to a real OBS instance."""
-import base64, hashlib, json, socket, struct
+"""Local authenticated obs-websocket fixture. Never connects to a real OBS instance.
+
+Like OBS, every state change is announced as an event carrying the new value. Each request
+type received is printed ("REQ <type>") so tests can see what the client asked for.
+With --stale-record, the first GetRecordStatus answer is stale: recording starts (and its
+event is sent) between reading the status and sending the answer."""
+import base64, hashlib, json, socket, struct, sys
+
+stale_record = '--stale-record' in sys.argv
 
 server = socket.socket()
 server.bind(('127.0.0.1', 0))
@@ -47,10 +54,19 @@ while True:
         if identify['op'] != 1 or identify['d'].get('authentication') != expected: raise EOFError()
         send(c,2,{'negotiatedRpcVersion':1})
         recording=False; paused=False; muted=False; enabled=True; studio=False; program='Camera'; preview='Desktop'
+        def event(kind, data): send(c,5,{'eventType':kind,'eventIntent':1,'eventData':data})
+        # As obs-websocket does: outputActive is true only for STARTED and RESUMED.
+        def output(kind, *states):
+            for state in states: event(kind,{'outputActive':state in ('STARTED','RESUMED'),'outputState':'OBS_WEBSOCKET_OUTPUT_'+state})
         while True:
             message=receive(c); data=message['d']; kind=data['requestType']; args=data.get('requestData',{}); out={}; success=True
+            print('REQ', kind, flush=True)
             if kind=='GetSceneList':out={'scenes':[{'sceneName':'Camera'},{'sceneName':'Desktop'}],'currentProgramSceneName':program,'currentPreviewSceneName':preview}
-            elif kind=='GetRecordStatus':out={'outputActive':recording,'outputPaused':paused,'outputTimecode':'00:00:10.000'}
+            elif kind=='GetRecordStatus':
+                out={'outputActive':recording,'outputPaused':paused,'outputTimecode':'00:00:10.000'}
+                if stale_record:
+                    stale_record=False; recording=True
+                    output('RecordStateChanged','STARTING','STARTED')
             elif kind=='GetStreamStatus':out={'outputActive':False,'outputTimecode':'00:00:00.000'}
             elif kind=='GetStudioModeEnabled':out={'studioModeEnabled':studio}
             elif kind in ('GetReplayBufferStatus','GetVirtualCamStatus'):out={'outputActive':False}
@@ -71,6 +87,15 @@ while True:
             elif kind=='TriggerHotkeyByName':success=False
             else:success=False
             send(c,7,{'requestId':data['requestId'],'requestStatus':{'result':success,'code':100 if success else 500,'comment':'fixture rejected request'},'responseData':out})
-            if kind.startswith(('Toggle','Set','Trigger')):send(c,5,{'eventType':'FixtureStateChanged','eventIntent':1,'eventData':{}})
+            if not success: continue
+            if kind=='ToggleRecord':
+                if not recording: paused=False
+                output('RecordStateChanged',*(('STARTING','STARTED') if recording else ('STOPPING','STOPPED')))
+            elif kind=='ToggleRecordPause':output('RecordStateChanged','PAUSED' if paused else 'RESUMED')
+            elif kind=='ToggleInputMute':event('InputMuteStateChanged',{'inputName':'Mic','inputMuted':muted})
+            elif kind=='SetStudioModeEnabled':event('StudioModeStateChanged',{'studioModeEnabled':studio})
+            elif kind in ('SetCurrentProgramScene','TriggerStudioModeTransition'):event('CurrentProgramSceneChanged',{'sceneName':program})
+            elif kind=='SetCurrentPreviewScene':event('CurrentPreviewSceneChanged',{'sceneName':preview})
+            elif kind=='SetSceneItemEnabled':event('SceneItemEnableStateChanged',{'sceneName':args['sceneName'],'sceneItemId':7,'sceneItemEnabled':enabled})
     except (EOFError, OSError, ValueError, KeyError):pass
     finally:c.close()

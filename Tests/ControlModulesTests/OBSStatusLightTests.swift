@@ -33,12 +33,13 @@ struct OBSStatusLightTests {
         #expect(paused.colors(at: 1.5, ledCount: 24)[LightLayout.rightBar] != OBSStatusLight.streamingColor)
     }
 
-    @Test func streamingIsGreenAndMusicPauseIsInactive() {
+    @Test func streamingIsGreenAndMusicPauseStaysActive() {
         let stream = OBSStatusLight(state: OBSOutputState(streaming: true))
         #expect(stream.colors(at: 0.5, ledCount: 24).allSatisfy { $0 == OBSStatusLight.streamingColor })
         let music = MusicGlow(palette: [.white])
         #expect(music.isActive)
+        // Paused music still shows its glow: no extra global dimming on top.
         music.playing = false
-        #expect(!music.isActive)
+        #expect(music.isActive)
     }
 }

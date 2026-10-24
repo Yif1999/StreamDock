@@ -4,6 +4,21 @@ import Testing
 @testable import DockKit
 
 @MainActor struct DisplayPowerTests {
+    @Test func firmwareWakeReleaseRequestsMacWakeButPreSleepReleaseDoesNot() {
+        for key in [DockKey.lcd(6), .round(1)] {
+            var gate = WakeKeyGate()
+            let up = DockInputEvent(key: key, pressed: false)
+            let firmwareWake = gate.route(up, asleep: true)
+            #expect(firmwareWake.consume && firmwareWake.wake)
+            gate.suppress([key])
+            let heldRelease = gate.route(up, asleep: true)
+            #expect(heldRelease.consume && !heldRelease.wake)
+            _ = gate.route(DockInputEvent(key: key, pressed: true), asleep: true)
+            let normalRelease = gate.route(up, asleep: true)
+            #expect(normalRelease.consume && !normalRelease.wake)
+            #expect(!gate.route(up, asleep: false).wake)
+        }
+    }
     @Test func followsDisplaysAndSystemSleepWithoutPrematureWake() {
         var asleep: Bool? = false
         var changes: [Bool] = []

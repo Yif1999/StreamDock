@@ -85,7 +85,7 @@ open build/StreamDock.app
 - 通用控制为日常 / Home Assistant / OBS 三页；OBS 属于通用控制页，不占用另两个圆键。
 - `OBSClient` 只连接本机，通过 WebSocket 5 的挑战认证读取 OBS 保存的凭据；服务开关由用户在 OBS 中设置。
 - 所有请求带唯一 ID 与 5 秒超时；断线结束等待请求、清除运行状态，重连只同步状态，不重发操作。
-- 事件触发刷新，另有 2 秒兜底同步；录制/直播/静音等以 OBS 返回为准。来源显隐绑定场景及 item ID（同名来源可区分），已删除目标不回退到其他目标。
+- 状态同步以 OBS 事件为主（`OBSState`）：状态按来源分为场景、输出（录制/暂停/推流/回放/虚拟相机/工作室模式）、输入静音、来源、热键五块。带新值的事件（如 `RecordStateChanged`、`CurrentProgramSceneChanged`、`InputMuteStateChanged`）直接更新，不回读 OBS；只说明"列表变了"的事件（新建/删除场景、输入、来源）只重新读取对应那一块。输出事件按 `outputState` 解释而不是 `outputActive`（后者只在 STARTED/RESUMED 时为真，暂停和重连时为假，但输出仍在进行）；STARTING/STOPPING 只是过渡，不改状态。每块有版本号，事件到达即加一；读取期间若有事件到达，这次回包作废并重读，旧回包不会覆盖新事件。兜底核对只针对"安静"的状态块：某块 10 秒内既没有事件、也没有读过，才读回一次，弥补可能漏掉的事件；刚收到事件的块不会被读回覆盖——OBS 繁忙时（例如 4K60 双路编码丢帧），状态查询的答复可能落后于它自己发出的事件，曾出现停止录制后读回"仍在录制"。来源显隐绑定场景及 item ID（同名来源可区分），已删除目标不回退到其他目标。
 - 测试使用独立的本机 WebSocket fixture，不会控制用户真实的 OBS。
 - 参考：[多 OBS 控制器](https://key123.vip/product/20250217000167?lang=zh)、[obs-websocket 5 协议](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md)。本项目范围为本机单个 OBS，不包括多实例同步与任意协议请求编辑器。
 
@@ -93,7 +93,7 @@ open build/StreamDock.app
 
 `LightActivityCenter` 保存跨页面、跨场景的活动动画；优先级为通知 > 全局 OBS > 当前页动画 > 场景色。`OBSLightMonitor` 随应用启动，通过独立状态回调同步录制、暂停及推流状态，断线清除指示。OBS 录制纯红色、推流纯绿色、暂停橙琥珀色；同时输出时各占半圈。
 
-`LightAnimation` 输出浮点 `LightPixel`（颜色通道比例 + 感知亮度），不在模块中做 Gamma 或量化。`isActive` 标识活动状态，音乐暂停返回 false。引擎在感知空间完成颜色渐变、用户亮度与活动倍率（活动 100% / 非活动 50%），由 DockCore 的 `LEDOutput` 将组合亮度一次性进行 Gamma 2.2 映射，再量化为 RGB，并保留暗部防抖。颜色通道比例不参与 Gamma，避免改变色相。
+`LightAnimation` 输出浮点 `LightPixel`（颜色通道比例 + 感知亮度），不在模块中做 Gamma 或量化。`isActive` 标识活动状态；音乐暂停仍在显示灯效，算活动（不再叠加 50% 的非活动调暗），暂停亮度由灯效自己决定。引擎在感知空间完成颜色渐变、用户亮度与活动倍率（活动 100% / 非活动 50%），由 DockCore 的 `LEDOutput` 将组合亮度一次性进行 Gamma 2.2 映射，再量化为 RGB，并保留暗部防抖。颜色通道比例不参与 Gamma，避免改变色相。
 
 硬件总亮度固定 100%，调光直接合入每帧，避免硬件百分比整数损失暗部精度。设置滑块保持原值、改为感知亮度语义；满设置的非活动纯色输出峰值约 55/255（22%）。设备重连重发硬件总亮度，退出淡出也经过同一映射。离线音乐回放使用同一个输出器；通知黑色间隔仍算活动。
 

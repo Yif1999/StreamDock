@@ -24,9 +24,9 @@ import RhythmKit
 final class MusicGlow: LightAnimation {
     /// This frame's rhythm input, or nil without live audio (then an idle drift plays).
     var rhythm: () -> (events: [RhythmEvent], snapshot: RhythmSnapshot)? = { nil }
-    /// False while Music is paused: the glow eases into a slow breath and back.
+    /// False while Music is paused: the glow eases into a slow breath and back. Paused is
+    /// still an active light (it is showing the music), so `isActive` stays true.
     var playing = true
-    var isActive: Bool { playing }
 
     private struct Blob {
         var position: Double
@@ -98,7 +98,8 @@ final class MusicGlow: LightAnimation {
         let rawIntensity = (input?.snapshot.intensity ?? 0.3) * (playing ? 1 : 0)
         let intensity = Self.ease(self.intensity ?? rawIntensity, toward: rawIntensity, dt: dt, over: GlowBudget.intensityEase)
         self.intensity = intensity
-        let rawLoudness = input?.snapshot.loudness.low ?? 0.3 + 0.15 * sin(2 * .pi * time / 3)
+        // Paused is silence: whatever the audio side still reports, loudness fades with presence.
+        let rawLoudness = (input?.snapshot.loudness.low ?? 0.3 + 0.15 * sin(2 * .pi * time / 3)) * (playing ? 1 : 0)
         let loudness = Self.ease(self.loudness ?? rawLoudness, toward: rawLoudness, dt: dt, over: GlowBudget.loudnessEase)
         self.loudness = loudness
 
@@ -174,7 +175,8 @@ final class MusicGlow: LightAnimation {
         // Short bars: the main album color; accents light them by how far they spread.
         let barAccent = ripples.reduce(0.0) { GlowBudget.screen($0, $1.envelope.level * min(1, $1.reach / 0.5)) }
         let barPlaying = GlowBudget.brightness(base: GlowBudget.barBase(loudness: loudness, intensity: intensity), accent: barAccent, groove: groove.level)
-        let barLevel = pause * 0.8 + (barPlaying - pause * 0.8) * presence
+        let barPause = GlowBudget.barPauseBrightness(at: time)
+        let barLevel = barPause + (barPlaying - barPause) * presence
         let barColor = blobColors[0].mixed(with: .white, amount: GlowBudget.bloom * barAccent * barAccent)
         for bar in [LightLayout.leftBar, LightLayout.rightBar] where bar < ledCount {
             pixels[bar] = LightPixel(channels: barColor.ledChannels, level: barLevel)

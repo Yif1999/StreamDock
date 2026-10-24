@@ -1,6 +1,9 @@
 import AppKit
 import CoreGraphics
 import IOKit.pwr_mgt
+import os
+
+private let powerLog = Logger(subsystem: "StreamDock", category: "DisplayPower")
 
 /// Follows the Mac's display sleep state without preventing normal idle sleep.
 @MainActor
@@ -46,9 +49,11 @@ public final class DisplayPowerMonitor {
     }
     /// Reports physical user input to macOS; this does not bypass the lock screen.
     public func requestWake() {
-        _ = IOPMAssertionDeclareUserActivity("StreamDock key pressed" as CFString, kIOPMUserActiveLocal, &wakeAssertion)
+        let result = IOPMAssertionDeclareUserActivity("StreamDock key pressed" as CFString, kIOPMUserActiveLocal, &wakeAssertion)
+        powerLog.notice("Wake request result=\(result) assertion=\(self.wakeAssertion) systemSleeping=\(self.systemSleeping) screensSleeping=\(self.screensSleeping)")
     }
     func receive(_ name: Notification.Name) {
+        powerLog.notice("Workspace power notification=\(name.rawValue, privacy: .public)")
         switch name {
         case NSWorkspace.screensDidSleepNotification: screensSleeping = true
         case NSWorkspace.screensDidWakeNotification: screensSleeping = false
@@ -59,7 +64,10 @@ public final class DisplayPowerMonitor {
         publish()
     }
     func refresh() {
-        if let asleep = readAsleep() { screensSleeping = asleep }
+        if let asleep = readAsleep() {
+            if screensSleeping != asleep { powerLog.notice("Display query changed asleep=\(asleep)") }
+            screensSleeping = asleep
+        }
         publish()
     }
     private func publish() {

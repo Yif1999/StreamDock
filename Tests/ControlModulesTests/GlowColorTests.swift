@@ -45,28 +45,37 @@ import Testing
 }
 
 @MainActor @Suite struct PauseTests {
-    /// Paused, the glow eases down into a dim breath (no jump), and comes back when playing.
+    /// Paused, the glow eases down (no jump) to the quietest playing level and breathes there.
     @Test func pauseSettlesIntoABreath() {
         let glow = MusicGlow(palette: [RGB(40, 90, 230), RGB(240, 150, 40)])
         var snapshot = RhythmSnapshot()
         snapshot.intensity = 1
-        snapshot.loudness = Bands(low: 0.8, mid: 0.8, high: 0.8)
-        func level(_ frame: [RGB]) -> Double { Double(frame.map { Int($0.red) + Int($0.green) + Int($0.blue) }.reduce(0, +)) }
-        var output = LEDOutput()
+        // Perceived brightness: the brightest ring LED (a blob's center) and a short bar.
         var time = 0.0
-        var playing: [Double] = []
-        for _ in 0..<90 {
-            time += 1.0 / 30
-            playing.append(level(output.render(glow.frame(at: time, ledCount: 24, input: ([], snapshot)))))
+        var bars: [Double] = []
+        func run(_ frames: Int) -> [Double] {
+            (0..<frames).map { _ in
+                time += 1.0 / 30
+                let pixels = glow.frame(at: time, ledCount: 24, input: ([], snapshot))
+                bars.append(pixels[LightLayout.leftBar].level)
+                return LightLayout.ring.map { pixels[$0].level }.max()!
+            }
         }
+        // The quietest playing: full intensity, silence.
+        snapshot.loudness = Bands()
+        let floor = run(90).suffix(30).reduce(0, +) / 30
+        let barFloor = bars.suffix(30).reduce(0, +) / 30
+        snapshot.loudness = Bands(low: 0.8, mid: 0.8, high: 0.8)
+        let playing = run(60)
         glow.playing = false
-        var paused: [Double] = []
-        for _ in 0..<150 {
-            time += 1.0 / 30
-            paused.append(level(output.render(glow.frame(at: time, ledCount: 24, input: ([], snapshot)))))
-        }
-        let settled = paused.suffix(30).reduce(0, +) / 30
-        #expect(settled < 0.6 * playing.last!, "playing \(playing.last!) paused \(settled)")
+        bars = []
+        let paused = run(360)
+        // Paused keeps the light at the quietest playing level, breathing gently around it.
+        let settled = paused.suffix(180).reduce(0, +) / 180
+        let barSettled = bars.suffix(180).reduce(0, +) / 180
+        #expect(abs(settled - floor) < 0.02, "floor \(floor) paused \(settled)")
+        #expect(abs(barSettled - barFloor) < 0.02, "bar floor \(barFloor) paused \(barSettled)")
+        #expect(settled < playing.last!)
         let steps = zip([playing.last!] + paused, paused).map { abs($1 - $0) / playing.last! }
         #expect(steps.max()! < 0.08, "largest step \(steps.max()!)")
     }

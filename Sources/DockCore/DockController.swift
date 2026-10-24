@@ -250,6 +250,7 @@ public final class DockController {
         guard device != nil else { return }
         let route = wakeGate.route(event, asleep: displaysSleeping)
         if route.consume {
+            log.notice("Wake gate key=\(String(describing: event.key), privacy: .public) pressed=\(event.pressed) asleep=\(self.displaysSleeping) requestWake=\(route.wake) handlerAvailable=\(self.requestDisplayWake != nil)")
             if route.wake { requestDisplayWake?() }
             return
         }

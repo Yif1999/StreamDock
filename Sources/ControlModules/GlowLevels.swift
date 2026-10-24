@@ -56,9 +56,11 @@ struct GlowBudget {
     /// Sparks: envelope shape (fade in ≈0.3 s, out over ≈0.5 s), least time between two, peak size,
     /// and how far toward white they lift the color.
     static let sparkAttack = 0.08, sparkDecay = 0.45, sparkSpacing = 0.12, sparkSize = 0.65, sparkWhite = 0.45
-    /// Paused: a breath of `pauseLevel` ± `pauseBreath` every `pausePeriod` s, blobs at
-    /// `pauseFlow` speed; eased in over `pauseEase` s and back out over `resumeEase` s.
-    static let pauseLevel = 0.3, pauseBreath = 0.05, pausePeriod = 6.0, pauseFlow = 0.12
+    /// Paused: a breath around the lowest base the music ever plays at (`playingFloor`, and
+    /// `barCalm` for the bars) — the light stays, only the music's movement stops —
+    /// ± `pauseBreath` every `pausePeriod` s, blobs at `pauseFlow` speed; eased in over
+    /// `pauseEase` s and back out over `resumeEase` s.
+    static let pauseBreath = 0.04, pausePeriod = 6.0, pauseFlow = 0.12
     static let pauseEase = 0.8, resumeEase = 0.4
     /// A new album's colors blend in over this long.
     static let paletteFade = 2.5
@@ -90,8 +92,15 @@ struct GlowBudget {
         blobFloor + (1 - blobFloor) * pow(weight, blobCurve)
     }
 
+    /// The lowest base while playing: full intensity, silence.
+    static let playingFloor = base(loudness: 0, intensity: 1)
+
     static func pauseBrightness(at time: Double) -> Double {
-        pauseLevel + pauseBreath * sin(2 * .pi * time / pausePeriod)
+        playingFloor + pauseBreath * sin(2 * .pi * time / pausePeriod)
+    }
+
+    static func barPauseBrightness(at time: Double) -> Double {
+        barCalm + pauseBreath * sin(2 * .pi * time / pausePeriod)
     }
 
     static func brightness(base: Double, accent: Double, groove: Double) -> Double {
