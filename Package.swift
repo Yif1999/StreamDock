@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 import Foundation
 import PackageDescription
 
@@ -7,7 +7,7 @@ let libtransportDir = "\(root)/ThirdParty/libtransport"
 
 let package = Package(
     name: "StreamDock",
-    platforms: [.macOS(.v15)],
+    platforms: [.macOS(.v26)],
     products: [
         .executable(name: "DockApp", targets: ["DockApp"]),
         .executable(name: "dock-probe", targets: ["DockProbe"]),

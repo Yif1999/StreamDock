@@ -11,11 +11,11 @@ struct StreamDockApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuContent(controller: appDelegate.controller)
+            MenuPanel(controller: appDelegate.controller)
         } label: {
             MenuBarIcon(connection: appDelegate.controller.connection)
         }
-        .menuBarExtraStyle(.menu)
+        .menuBarExtraStyle(.window)
 
         Window("StreamDock 设置", id: SettingsView.windowID) {
             SettingsView(controller: appDelegate.controller)

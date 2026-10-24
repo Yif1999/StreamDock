@@ -26,7 +26,7 @@
 ## 分层
 
 ```
-DockApp          菜单栏图标、下拉菜单、设置窗口（SwiftUI）
+DockApp          菜单栏图标、液态玻璃面板、设置窗口（SwiftUI，macOS 26+）
 SceneGeneral     通用控制场景      ┐
 SceneVibeCoding  VibeCoding 场景   ├ 互相独立
 SceneSynth       合成器场景        ┘
@@ -63,7 +63,7 @@ CTransport       官方闭源 libtransport.dylib 的 C 接口（ThirdParty/libtr
 ## 构建
 
 ```sh
-swift build                 # 编译
+swift build                 # 编译（需要 macOS 26 SDK，Swift 6.2+）
 scripts/build_app.sh        # 打包成 build/StreamDock.app 并用开发证书签名
 open build/StreamDock.app
 ```

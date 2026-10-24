@@ -12,10 +12,13 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("设备") {
-                LabeledContent("状态", value: controller.connection.summary)
+            Section {
+                DeviceHeader(connection: controller.connection, large: true)
+                    .padding(.vertical, 4)
                 if case .connected(let serial, let firmware) = controller.connection {
-                    LabeledContent("固件", value: firmware.isEmpty ? "—" : firmware)
+                    if !firmware.isEmpty {
+                        LabeledContent("固件", value: firmware)
+                    }
                     LabeledContent("序列号", value: serial)
                 }
                 if case .failed(let message) = controller.connection {
@@ -24,8 +27,12 @@ struct SettingsView: View {
             }
 
             Section("亮度") {
-                percentSlider("按键屏幕", value: controller.settings.screenBrightness, set: controller.setScreenBrightness)
-                percentSlider("灯条", value: controller.settings.ledBrightness, set: controller.setLEDBrightness)
+                LabeledContent("按键屏幕") {
+                    PercentSlider(symbol: "sun.max.fill", title: "按键屏幕亮度", value: controller.settings.screenBrightness, set: controller.setScreenBrightness)
+                }
+                LabeledContent("灯条") {
+                    PercentSlider(symbol: "light.strip.2", title: "灯条亮度", value: controller.settings.ledBrightness, set: controller.setLEDBrightness)
+                }
             }
 
             Section {
@@ -47,6 +54,7 @@ struct SettingsView: View {
                         Button("去系统设置授权") {
                             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
                         }
+                        .buttonStyle(.glassProminent)
                     case OSStatus(procNotFound):
                         Text("「音乐」未运行").foregroundStyle(.secondary)
                     default:
@@ -58,7 +66,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 460)
+        .frame(width: 480)
         .fixedSize(horizontal: false, vertical: true)
         .task {
             while !Task.isCancelled {
@@ -82,24 +90,18 @@ struct SettingsView: View {
         return AEDeterminePermissionToAutomateTarget(target.aeDesc, typeWildCard, typeWildCard, false)
     }
 
-    private func percentSlider(_ title: String, value: Int, set: @escaping (Int) -> Void) -> some View {
-        LabeledContent(title) {
-            HStack {
-                Slider(value: Binding(get: { Double(value) }, set: { set(Int($0)) }), in: 0...100, step: 5)
-                Text("\(value)%").monospacedDigit().frame(width: 40, alignment: .trailing)
-            }
-        }
-    }
-
     private func sceneRow(_ index: Int) -> some View {
         let scene = controller.scenes[index]
         let hasOverride = controller.settings.ledColorOverrides[scene.id] != nil
-        return HStack {
-            Text("圆键 \(index + 1)").foregroundStyle(.secondary)
-            Text(scene.name)
-            if controller.activeSceneIndex == index {
-                Text("当前").font(.caption).padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(.tint.opacity(0.2), in: Capsule())
+        let active = controller.activeSceneIndex == index
+        return HStack(spacing: 12) {
+            Image(systemName: scene.symbolName)
+                .frame(width: 32, height: 32)
+                .glassEffect(active ? .regular.tint(Color(rgb: controller.ledColor(for: scene)).opacity(0.45)) : .regular, in: .rect(cornerRadius: 9))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(scene.name)
+                Text(active ? "圆键 \(index + 1) · 当前" : "圆键 \(index + 1)")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             ColorPicker("灯条颜色", selection: Binding(
@@ -108,24 +110,8 @@ struct SettingsView: View {
             ), supportsOpacity: false)
             .labelsHidden()
             Button("默认") { controller.setLEDColor(nil, for: scene) }
+                .buttonStyle(.glass)
                 .disabled(!hasOverride)
         }
-    }
-}
-
-extension Color {
-    init(rgb: RGB) {
-        self.init(.sRGB, red: Double(rgb.red) / 255, green: Double(rgb.green) / 255, blue: Double(rgb.blue) / 255)
-    }
-}
-
-extension RGB {
-    init(color: Color) {
-        let ns = NSColor(color).usingColorSpace(.sRGB) ?? .white
-        self.init(
-            UInt8((ns.redComponent * 255).rounded()),
-            UInt8((ns.greenComponent * 255).rounded()),
-            UInt8((ns.blueComponent * 255).rounded())
-        )
     }
 }

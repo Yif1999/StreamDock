@@ -2,13 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>CFBundleIdentifier</key>
-	<string>dev.yif.StreamDock</string>
-	<key>CFBundleName</key>
-	<string>StreamDock</string>
 	<key>CFBundleDisplayName</key>
 	<string>StreamDock</string>
 	<key>CFBundleExecutable</key>
+	<string>StreamDock</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.yif.StreamDock</string>
+	<key>CFBundleName</key>
 	<string>StreamDock</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
@@ -17,8 +17,7 @@
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>15.0</string>
-	<!-- Menu bar only: no Dock icon until the settings window opens. -->
+	<string>26.0</string>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
