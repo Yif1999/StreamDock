@@ -58,7 +58,8 @@ private final class MemoryHATokens: HATokenStore {
         let suite = "StreamDock.HATests.\(UUID())"
         let defaults = try #require(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
-        let client = HAClient(defaults: defaults, tokens: MemoryHATokens())
+        // Short timeout and hold so the test does not wait out the real ones (6 s, 1 s).
+        let client = HAClient(defaults: defaults, tokens: MemoryHATokens(), requestTimeout: .milliseconds(500))
         defer { client.disconnect() }
         let address = "http://127.0.0.1:\(port)"
         #expect(client.configure(address: address, token: "fixture-token"))
@@ -70,7 +71,7 @@ private final class MemoryHATokens: HATokenStore {
         #expect(client.command(for: HABinding(action: .scene, entityID: "scene.work"))?.service == "turn_on")
         #expect(client.command(for: HABinding(action: .stopCover, entityID: "cover.blinds"))?.service == "stop_cover")
         client.setBinding(HABinding(action: .toggle, entityID: "light.desk"), at: 0)
-        let module = HAModule(client: client)
+        let module = HAModule(client: client, hold: .milliseconds(150))
         #expect(module.face(forSlot: 0).symbol == "power" && module.face(forSlot: 0).title == nil)
         module.keyDown(slot: 0)
         try await wait { client.busySlot == nil && client.entities.first { $0.id == "light.desk" }?.state == "on" }
@@ -94,10 +95,10 @@ private final class MemoryHATokens: HATokenStore {
         client.perform(slot: 3) // Direct calls cannot bypass the hold confirmation.
         #expect(client.busySlot == nil)
         module.keyDown(slot: 3); module.keyUp(slot: 3)
-        try await Task.sleep(for: .milliseconds(1100))
+        try await Task.sleep(for: .milliseconds(250))
         #expect(client.entities.first { $0.id == "switch.plug" }?.state == "on")
         module.keyDown(slot: 3); module.sceneDidDeactivate()
-        try await Task.sleep(for: .milliseconds(1100))
+        try await Task.sleep(for: .milliseconds(250))
         #expect(client.entities.first { $0.id == "switch.plug" }?.state == "on")
         module.keyDown(slot: 3)
         try await wait { client.entities.first { $0.id == "switch.plug" }?.state == "off" && client.busySlot == nil }

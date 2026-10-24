@@ -5,38 +5,42 @@ import DockCore
 
 @MainActor
 struct GeneralControlsTests {
+    /// The display-sleep hold, shortened from the real second, and a wait safely past it.
+    static let hold: Duration = .milliseconds(100)
+    static let pastHold: Duration = .milliseconds(250)
+
     @Test func displaySleepRequiresContinuousHoldAndCanBeRearmed() async throws {
         var calls = 0
-        let module = DisplaySleepModule { calls += 1; return true }
+        let module = DisplaySleepModule(hold: Self.hold) { calls += 1; return true }
         module.keyDown(slot: 0)
         #expect(module.remaining == 1)
         module.keyUp(slot: 0)
         #expect(module.remaining == nil)
-        try await Task.sleep(for: .milliseconds(1100))
+        try await Task.sleep(for: Self.pastHold)
         #expect(calls == 0)
         module.keyDown(slot: 0)
-        try await Task.sleep(for: .milliseconds(1100))
+        try await Task.sleep(for: Self.pastHold)
         #expect(calls == 1)
         #expect(module.remaining == nil)
         // A repeated down while still held must not trigger another sleep.
         module.keyDown(slot: 0)
-        try await Task.sleep(for: .milliseconds(1100))
+        try await Task.sleep(for: Self.pastHold)
         #expect(calls == 1)
         module.keyUp(slot: 0)
     }
 
     @Test func leavingSceneCancelsDisplaySleep() async throws {
         var calls = 0
-        let module = DisplaySleepModule { calls += 1; return true }
+        let module = DisplaySleepModule(hold: Self.hold) { calls += 1; return true }
         module.keyDown(slot: 0)
         module.sceneDidDeactivate()
-        try await Task.sleep(for: .milliseconds(1100))
+        try await Task.sleep(for: Self.pastHold)
         #expect(calls == 0)
         #expect(module.remaining == nil)
     }
 
     @Test func failedDisplaySleepIsVisible() async throws {
-        let module = DisplaySleepModule { false }
+        let module = DisplaySleepModule(hold: Self.hold) { false }
         module.keyDown(slot: 0)
         let deadline = ContinuousClock.now + .seconds(3)
         while module.remaining != nil && ContinuousClock.now < deadline {

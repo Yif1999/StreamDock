@@ -43,8 +43,10 @@ public final class HAClient {
         let continuation: CheckedContinuation<HAValue, any Error>
         let timeout: Task<Void, Never>
     }
-    init(defaults: UserDefaults = .standard, tokens: any HATokenStore = HAKeychain()) {
-        self.defaults = defaults; self.tokens = tokens
+    /// How long a request may take before it is reported as timed out (not retried).
+    @ObservationIgnored private let requestTimeout: Duration
+    init(defaults: UserDefaults = .standard, tokens: any HATokenStore = HAKeychain(), requestTimeout: Duration = .seconds(6)) {
+        self.defaults = defaults; self.tokens = tokens; self.requestTimeout = requestTimeout
         address = defaults.string(forKey: "haAddress") ?? ""
         let saved = defaults.data(forKey: "haBindings").flatMap { try? JSONDecoder().decode([HABinding].self, from: $0) }
         bindings = saved?.count == 15 ? saved! : Array(repeating: HABinding(), count: 15)
@@ -215,8 +217,8 @@ public final class HAClient {
         let id = sequence; let stamp = generation
         var message = body; message["id"] = .number(Double(id))
         return try await withCheckedThrowingContinuation { continuation in
-            let timeout = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(6)) } catch { return }
+            let timeout = Task { [weak self, requestTimeout] in
+                do { try await Task.sleep(for: requestTimeout) } catch { return }
                 if let item = self?.pending.removeValue(forKey: id) { item.continuation.resume(throwing: HAFailure.timeout) }
             }
             pending[id] = Pending(continuation: continuation, timeout: timeout)

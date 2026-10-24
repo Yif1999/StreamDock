@@ -11,8 +11,11 @@ public final class HAModule: DockModule {
     private var holdSlot: Int?
     private var holdBinding: HABinding?
 
+    /// How long a protected power key must be held before it switches off.
+    private let hold: Duration
+
     public convenience init() { self.init(client: .shared) }
-    init(client: HAClient) { self.client = client }
+    init(client: HAClient, hold: Duration = .seconds(1)) { self.client = client; self.hold = hold }
     public func attach(_ context: ModuleContext) {
         self.context = context
         client.onChange = { [weak self] in
@@ -103,8 +106,8 @@ public final class HAModule: DockModule {
             cancelHold()
             holdSlot = slot; holdBinding = binding
             context?.setNeedsDisplay()
-            holdTask = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            holdTask = Task { [weak self, hold] in
+                do { try await Task.sleep(for: hold) } catch { return }
                 guard let self, !Task.isCancelled, self.heldKeys.contains(slot), self.holdSlot == slot,
                       self.context?.isVisible != false, self.client.connection == .ready,
                       self.client.bindings[slot] == binding, self.client.entity(for: binding)?.state == "on" else { return }

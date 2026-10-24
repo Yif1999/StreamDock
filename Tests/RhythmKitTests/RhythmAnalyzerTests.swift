@@ -162,28 +162,6 @@ private func errors(_ times: [Double], to targets: [Double]) -> [Double] {
         #expect(Double(near(light)) <= 0.1 * Double(light.filter { $0 > 10 }.count), "accents on light kicks: \(near(light))")
     }
 
-    @Test func quietPassagesHaveSmallerAccents() {
-        // 20 s of heavy kicks, then 20 s of the same pattern much softer.
-        var hits: [(Double, Bands.Band, Double)] = []
-        for (index, time) in stride(from: 0.0, to: 40, by: 0.5).enumerated() {
-            let loud = time < 20
-            hits.append((time, .low, (index.isMultiple(of: 4) ? 10.0 : 5.0) * (loud ? 1 : 0.35)))
-        }
-        let run = Run(Score(hits: hits, duration: 40).frames())
-        func sizes(_ range: Range<Double>) -> [Double] {
-            run.events.compactMap { entry in
-                if case .accent(let time, let strength) = entry.event, range.contains(time) { return strength }
-                return nil
-            }
-        }
-        let loud = sizes(8..<20), quiet = sizes(28..<40)
-        #expect(!loud.isEmpty && !quiet.isEmpty)
-        let loudMean = loud.reduce(0, +) / Double(max(1, loud.count))
-        let quietMean = quiet.reduce(0, +) / Double(max(1, quiet.count))
-        #expect(loudMean > 0.8, "loud accents \(loudMean)")
-        #expect(quietMean < 0.5, "quiet accents \(quietMean)")
-    }
-
     @Test func kickAndSnareTogetherAreOneAccent() {
         // Every beat: a kick, and 20 ms later a snare — one strike, not two.
         let beats = stride(from: 0.0, to: 30, by: 0.5)

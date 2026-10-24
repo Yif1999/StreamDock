@@ -29,7 +29,11 @@ public final class DisplaySleepModule: DockModule {
         })
     }
 
-    init(sleepDisplay: @escaping @MainActor () async -> Bool) {
+    /// How long the key must be held.
+    private let hold: Duration
+
+    init(hold: Duration = .seconds(1), sleepDisplay: @escaping @MainActor () async -> Bool) {
+        self.hold = hold
         self.sleepDisplay = sleepDisplay
     }
 
@@ -48,8 +52,8 @@ public final class DisplaySleepModule: DockModule {
         failed = false
         remaining = 1
         context?.setNeedsDisplay()
-        countdown = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(1)) } catch { return }
+        countdown = Task { [weak self, hold] in
+            do { try await Task.sleep(for: hold) } catch { return }
             guard let self, !Task.isCancelled, self.held else { return }
             self.remaining = nil
             self.context?.setNeedsDisplay()
