@@ -4,8 +4,6 @@ import DockCore
 @MainActor
 public func makeVibeCodingScene() -> DockScene {
     let scene = DockScene(id: "vibecoding", name: "VibeCoding", defaultLEDColor: RGB(hex: "#AF52DE"))
-    scene.place(LabelModule(KeyFace(
-        symbol: "chevron.left.forwardslash.chevron.right", caption: "VibeCoding", foreground: RGB(hex: "#BF5AF2")
-    )), keys: [8])
+    scene.place(LabelModule(KeyFace(symbol: "chevron.left.forwardslash.chevron.right", caption: "VibeCoding")), keys: [8])
     return scene
 }

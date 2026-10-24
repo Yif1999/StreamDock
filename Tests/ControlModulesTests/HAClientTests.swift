@@ -79,13 +79,13 @@ private final class MemoryHATokens: HATokenStore {
         let brighter = HABinding(action: .brighter, entityID: "light.desk")
         #expect(client.command(for: brighter)?.data["brightness_step_pct"] == .number(10))
         client.setBinding(brighter, at: 1)
-        #expect(module.face(forSlot: 1).title == nil && module.face(forSlot: 1).symbol == "plus")
+        #expect(module.face(forSlot: 1).title == nil && module.face(forSlot: 1).symbol == "sun.max.fill")
         client.perform(slot: 1)
         try await wait { client.busySlot == nil && client.entities.first { $0.id == "light.desk" }?.displayState == "60%" }
         client.setBinding(HABinding(action: .script, entityID: "script.fail"), at: 2)
         client.perform(slot: 2)
         try await wait { client.busySlot == nil && client.errorMessage != nil }
-        #expect(module.face(forSlot: 2).title == "失败")
+        #expect(module.face(forSlot: 2).caption == "Failed" && module.face(forSlot: 2).tone == .normal)
         client.reconnect()
         #expect(client.entities.isEmpty)
         try await wait { client.connection == .ready }

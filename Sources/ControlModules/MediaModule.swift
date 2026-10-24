@@ -30,8 +30,6 @@ public final class MediaModule: DockModule {
     private var favoriteFailed = false
     private var displayedTrack: AppleMusic.Track?
 
-    private static let tint = RGB(hex: "#FF375F")
-    private static let dimmed = RGB(hex: "#8E8E93")
 
     public init() {}
 
@@ -46,28 +44,19 @@ public final class MediaModule: DockModule {
 
     public func face(forSlot slot: Int) -> KeyFace {
         if music.permission == .denied {
-            return KeyFace(symbol: symbol(forSlot: slot), caption: slot == 1 ? "需授权" : nil, foreground: RGB(hex: "#FF9F0A"))
+            return KeyFace(symbol: symbol(forSlot: slot), caption: slot == 1 ? "Allow" : nil, tone: slot == 1 ? .caution : .dim)
         }
         if slot == 3 {
-            return KeyFace(symbol: "music.note", artwork: cover, caption: cover == nil ? "正在播放" : nil,
-                           foreground: music.track == nil ? Self.dimmed : .white)
+            return KeyFace(symbol: "music.note", artwork: cover, caption: cover == nil ? "Music" : nil,
+                           tone: music.track == nil ? .dim : .normal)
         }
         if slot == 4 {
-            return KeyFace(symbol: favorite?.enabled == true ? "star.fill" : "star",
-                           caption: favoriteBusy ? "处理中" : favoriteFailed ? "重试" : favorite == nil ? "不可用" : "喜爱",
-                           foreground: favorite == nil ? Self.dimmed : favorite?.enabled == true ? Self.tint : .white)
+            guard let favorite else { return KeyFace(symbol: "star.fill", caption: "Love", tone: .dim) }
+            let caption = favoriteBusy ? "…" : favoriteFailed ? "Retry" : favorite.enabled ? "Loved" : "Love"
+            return KeyFace(symbol: "star.fill", caption: caption, tone: favorite.enabled ? .on : .normal)
         }
         let running = music.state != .notRunning
-        switch slot {
-        case 1:
-            return KeyFace(
-                symbol: symbol(forSlot: 1),
-                caption: running ? nil : "Music",
-                foreground: running ? Self.tint : Self.dimmed
-            )
-        default:
-            return KeyFace(symbol: symbol(forSlot: slot), foreground: running ? .white : Self.dimmed)
-        }
+        return KeyFace(symbol: symbol(forSlot: slot), caption: slot == 1 && !running ? "Music" : nil, tone: running ? .normal : .dim)
     }
 
     public func keyDown(slot: Int) {

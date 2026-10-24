@@ -32,66 +32,53 @@ public final class HAModule: DockModule {
         guard client.bindings.indices.contains(slot) else { return .blank }
         if client.connection != .ready || client.bindings.allSatisfy({ $0.action == .none }) {
             switch slot {
-            case 6: return KeyFace(symbol: "house", caption: "打开 HA", foreground: RGB(hex: "#18BDF1"))
-            case 7: return KeyFace(title: "HA", caption: client.connection == .ready ? "请配置按键" : client.connection == .connecting ? "连接中" : "未连接")
-            case 8: return KeyFace(symbol: "arrow.triangle.2.circlepath", caption: "重连")
+            case 6: return KeyFace(symbol: "house.fill", caption: "Open HA")
+            case 7:
+                let status = client.connection == .ready ? "Set Up" : client.connection == .connecting ? "Connecting" : "Offline"
+                return KeyFace(title: "HA", caption: status, tone: client.connection == .ready ? .normal : .dim)
+            case 8: return KeyFace(symbol: "arrow.triangle.2.circlepath", caption: "Retry")
             default: return .blank
             }
         }
-        if holdSlot == slot { return KeyFace(title: "1 秒", caption: "松手取消", foreground: RGB(hex: "#FF9F0A")) }
+        if holdSlot == slot { return KeyFace(title: "1s", caption: "Hold", tone: .caution) }
         let binding = client.bindings[slot]
         guard binding.action != .none else { return .blank }
         let entity = client.entity(for: binding)
         let name = binding.label.isEmpty ? (entity?.name ?? binding.entityID) : binding.label
-        let caption = String((name.isEmpty ? "未选择设备" : name).prefix(9))
-        var detail = entity?.displayState ?? "离线"
-        if client.busySlot == slot { detail = "处理中" }
-        else if client.lastActionSlot == slot, client.errorMessage != nil { detail = "失败" }
-        else if client.successSlot == slot, [.scene, .script].contains(binding.action) { detail = "已发送" }
         let available = binding.action == .status ? entity?.available == true : client.command(for: binding) != nil
-        let tint = !available ? RGB(hex: "#636366") : entity?.active == true ? RGB(hex: "#30D158") : RGB(hex: "#18BDF1")
-        if binding.action == .status {
-            return KeyFace(title: String(detail.prefix(9)), caption: caption, foreground: tint)
-        }
-        if client.busySlot == slot || (client.lastActionSlot == slot && client.errorMessage != nil) {
-            return KeyFace(title: detail, caption: caption, foreground: tint)
+        let on = entity?.active == true
+        var caption = name.isEmpty ? "Unset" : name
+        if client.busySlot == slot { caption = "…" }
+        else if client.lastActionSlot == slot, client.errorMessage != nil { caption = "Failed" }
+        else if client.successSlot == slot, [.scene, .script].contains(binding.action) { caption = "Sent" }
+        func key(symbol: String? = nil, value: String? = nil, active: Bool = false) -> KeyFace {
+            KeyFace(symbol: symbol, title: value, caption: caption, tone: !available ? .dim : active ? .on : .normal)
         }
         switch binding.action {
+        case .status:
+            return key(value: String((entity?.keyState ?? "Offline").prefix(7)))
         case .safePower:
-            if entity?.state == "off" { return KeyFace(symbol: "power", caption: caption, foreground: tint) }
-            return KeyFace(title: "长按1秒", caption: caption, foreground: tint)
+            return key(symbol: entity?.state == "on" ? "powerplug.fill" : "power", active: entity?.state == "on")
         case .toggle where ["climate", "fan", "light"].contains(entity?.domain ?? ""):
-            if entity?.state == "off" { return KeyFace(symbol: "power", caption: caption, foreground: tint) }
-            return KeyFace(title: detail, caption: caption, foreground: tint)
-        case .temperatureDown, .temperatureUp:
-            return KeyFace(symbol: binding.action == .temperatureDown ? "minus" : "plus", caption: caption, foreground: tint)
-        case .climateMode:
-            if entity?.state == "off" { return KeyFace(symbol: "power", caption: caption, foreground: tint) }
-            return KeyFace(title: entity?.modeTitle ?? "—", caption: caption, foreground: tint)
-        case .fanSpeedDown, .fanSpeedUp, .brighter, .dimmer:
-            let decrease = binding.action == .fanSpeedDown || binding.action == .dimmer
-            return KeyFace(symbol: decrease ? "minus" : "plus", caption: caption, foreground: tint)
-        case .fanOscillate:
-            let swinging = entity?.attributes["oscillating"]?.bool == true
-            return KeyFace(symbol: "arrow.left.and.right", caption: swinging ? "摇头 · 开" : "摇头 · 关", foreground: available && swinging ? RGB(hex: "#30D158") : tint)
-        case .fanPreset:
-            return KeyFace(title: String((entity?.attributes["preset_mode"]?.string ?? "—").prefix(6)), caption: caption, foreground: tint)
-        default: break
+            return entity?.state == "off" || !on ? key(symbol: "power") : key(value: entity?.keyState, active: true)
+        case .toggle, .turnOn, .turnOff:
+            return key(symbol: "power", active: on)
+        case .temperatureDown, .fanSpeedDown: return key(symbol: "minus")
+        case .temperatureUp, .fanSpeedUp: return key(symbol: "plus")
+        case .climateMode: return key(value: entity?.keyMode ?? "—")
+        case .fanOscillate: return key(symbol: "arrow.left.and.right", active: entity?.attributes["oscillating"]?.bool == true)
+        case .fanPreset: return key(value: String((entity?.attributes["preset_mode"]?.string ?? "—").prefix(7)))
+        case .brighter: return key(symbol: "sun.max.fill")
+        case .dimmer: return key(symbol: "sun.min.fill")
+        case .warmer: return key(symbol: "flame.fill")
+        case .cooler: return key(symbol: "snowflake")
+        case .scene: return key(symbol: "sparkles")
+        case .script: return key(symbol: "play.fill")
+        case .openCover: return key(symbol: "arrow.up")
+        case .closeCover: return key(symbol: "arrow.down")
+        case .stopCover: return key(symbol: "stop.fill")
+        case .none: return .blank
         }
-        let symbol: String
-        switch binding.action {
-        case .warmer: symbol = "sun.haze.fill"
-        case .cooler: symbol = "sun.max"
-        case .brighter: symbol = "sun.max.fill"
-        case .dimmer: symbol = "sun.min.fill"
-        case .scene: symbol = "sparkles"
-        case .script: symbol = "play.rectangle"
-        case .openCover: symbol = "arrow.up"
-        case .closeCover: symbol = "arrow.down"
-        case .stopCover: symbol = "stop.fill"
-        default: symbol = entity?.domain == "light" ? "lightbulb.fill" : entity?.domain == "fan" ? "fan.fill" : "power"
-        }
-        return KeyFace(symbol: symbol, caption: caption, foreground: tint)
     }
     public func keyDown(slot: Int) {
         if client.connection != .ready || client.bindings.allSatisfy({ $0.action == .none }) {

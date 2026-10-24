@@ -29,9 +29,9 @@ struct OBSClientTests {
         let module = OBSModule(client: OBSClient(defaults: defaults))
         let occupied = (0..<15).filter { module.face(forSlot: $0) != .blank }
         #expect(occupied == [6, 7, 8])
-        #expect(module.face(forSlot: 6).caption == "打开 OBS")
+        #expect(module.face(forSlot: 6).caption == "Open OBS")
         #expect(module.face(forSlot: 7).title == "OBS")
-        #expect(module.face(forSlot: 8).caption == "重连")
+        #expect(module.face(forSlot: 8).caption == "Retry")
     }
 
     @Test func authenticatedConnectionActionsErrorsAndReconnect() async throws {

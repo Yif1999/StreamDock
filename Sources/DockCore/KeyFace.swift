@@ -35,34 +35,33 @@ public struct RGB: Hashable, Codable, Sendable {
     public static let white = RGB(255, 255, 255)
 }
 
-/// What one LCD key shows. Modules describe keys with this; the core renders and uploads it.
+/// What one LCD key shows. Modules say what the key is and what state it is in; how that
+/// looks (colors, sizes, grid) is decided once, by `KeyDesign`.
 public struct KeyFace: Hashable, Sendable {
     /// SF Symbol name.
     public var symbol: String?
     /// Encoded album artwork, drawn edge to edge.
     public var artwork: Data?
-    /// Large text, shown when there is no symbol.
+    /// A value (a number, a short word) shown large instead of a glyph.
     public var title: String?
-    /// Small text along the bottom edge.
+    /// The label under the glyph or value: short English.
     public var caption: String?
-    public var foreground: RGB
-    public var background: RGB
+    /// What the key's state means; the only say a module has over color.
+    public var tone: KeyTone
 
     public init(
         symbol: String? = nil,
         artwork: Data? = nil,
         title: String? = nil,
         caption: String? = nil,
-        foreground: RGB = .white,
-        background: RGB = RGB(0x1C, 0x1C, 0x1E)
+        tone: KeyTone = .normal
     ) {
         self.symbol = symbol
         self.artwork = artwork
         self.title = title
         self.caption = caption
-        self.foreground = foreground
-        self.background = background
+        self.tone = tone
     }
 
-    public static let blank = KeyFace(background: .black)
+    public static let blank = KeyFace()
 }

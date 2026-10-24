@@ -134,6 +134,25 @@ public struct HAEntity: Identifiable, Equatable, Sendable {
     var targetTemperature: String? {
         attributes["temperature"]?.number.map { String(format: "%g°", $0) }
     }
+    /// The HVAC mode in a word, for keys.
+    var keyMode: String {
+        ["off": "Off", "auto": "Auto", "cool": "Cool", "heat": "Heat", "dry": "Dry", "fan_only": "Fan", "heat_cool": "H/C"][state] ?? state
+    }
+    /// The state as a key shows it: a number when there is one, else a short English word.
+    /// (The settings window keeps `displayState`.)
+    var keyState: String {
+        if state == "unavailable" { return "Offline" }
+        if state == "unknown" { return domain == "scene" ? "Ready" : "Unknown" }
+        if domain == "climate" { return state == "off" ? "Off" : targetTemperature ?? keyMode }
+        if domain == "fan", state == "on", let p = attributes["percentage"]?.number { return "\(Int(p))%" }
+        if domain == "light", state == "on", let b = attributes["brightness"]?.number { return "\(Int((b / 255 * 100).rounded()))%" }
+        if domain == "cover", let p = attributes["current_position"]?.number { return "\(Int(p))%" }
+        let words = ["on": "On", "off": "Off", "open": "Open", "closed": "Closed", "opening": "Opening", "closing": "Closing",
+                     "home": "Home", "not_home": "Away"]
+        if let word = words[state] { return word }
+        let unit = attributes["unit_of_measurement"]?.string ?? ""
+        return state + unit
+    }
     public var displayState: String {
         if state == "unavailable" { return "离线" }
         if state == "unknown" { return domain == "scene" ? "待执行" : "未知" }

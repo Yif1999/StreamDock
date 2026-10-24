@@ -8,6 +8,8 @@
 //   dock-probe ddc             read brightness / volume from the external monitor over DDC
 
 import AppKit
+import ImageIO
+import UniformTypeIdentifiers
 import ControlModules
 import DockCore
 import DockKit
@@ -16,15 +18,13 @@ import RhythmKit
 final class ProbeModule: DockModule {
     let keyCount = 15
     private let sceneName: String
-    private let background: RGB
 
-    init(sceneName: String, background: RGB) {
+    init(sceneName: String) {
         self.sceneName = sceneName
-        self.background = background
     }
 
     func face(forSlot slot: Int) -> KeyFace {
-        KeyFace(title: "\(slot + 1)", caption: slot == 0 ? sceneName : nil, background: background)
+        KeyFace(title: "\(slot + 1)", caption: slot == 0 ? sceneName : nil)
     }
 
     func keyDown(slot: Int) { print("[\(sceneName)] key \(slot + 1) down") }
@@ -32,19 +32,19 @@ final class ProbeModule: DockModule {
     func sceneDidActivate() { print("scene -> \(sceneName)") }
 }
 
-@MainActor func probeScene(_ id: String, _ led: RGB, _ background: RGB) -> DockScene {
+@MainActor func probeScene(_ id: String, _ led: RGB) -> DockScene {
     let scene = DockScene(id: id, name: id, defaultLEDColor: led)
-    scene.place(ProbeModule(sceneName: id, background: background), keys: Array(1...15))
+    scene.place(ProbeModule(sceneName: id), keys: Array(1...15))
     return scene
 }
 
 @MainActor func preview(into directory: String) throws {
     let faces: [(String, KeyFace)] = [
-        ("number", KeyFace(title: "12")),
-        ("symbol", KeyFace(symbol: "playpause.fill")),
-        ("symbol-caption", KeyFace(symbol: "speaker.wave.2.fill", caption: "45%")),
-        ("tinted", KeyFace(symbol: "sun.max.fill", caption: "亮度", foreground: RGB(hex: "#FFD60A"))),
-        ("long-title", KeyFace(title: "VibeCoding")),
+        ("value", KeyFace(title: "45", caption: "Volume")),
+        ("symbol", KeyFace(symbol: "pause.fill")),
+        ("symbol-caption", KeyFace(symbol: "mic.fill", caption: "Mic")),
+        ("on", KeyFace(symbol: "star.fill", caption: "Loved", tone: .on)),
+        ("alert", KeyFace(symbol: "mic.slash.fill", caption: "Muted", tone: .alert)),
     ]
     try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
     for (name, face) in faces {
@@ -90,6 +90,54 @@ case "ledmap":
     device.waitUntilIdle()
     device.close(notifyDevice: false)
     print("done")
+case "keysheet":
+    // dock-probe keysheet <out.png> [artwork]: the three general-control pages in the key
+    // design system, 3× nearest-neighbour.
+    let positional = arguments.dropFirst().filter { !$0.hasPrefix("--") }
+    let output = positional.first ?? "build/keysheet.png"
+    let art = positional.dropFirst().first.flatMap { FileManager.default.contents(atPath: $0) }
+    // --pressed: every key as shown while held down.
+    try writeKeySheet(to: output, artwork: art, pressed: arguments.contains("--pressed"))
+    print("wrote \(output)")
+case "keytest":
+    // Pixel test patterns on the top row, to see whether the firmware shows 64×64 key images
+    // 1:1 or scales them: 1-px stripes stay crisp only at 1:1.
+    guard let identity = M18Device.attached().first else {
+        print("no M18 attached")
+        break
+    }
+    let seconds = arguments.dropFirst().first.flatMap(Double.init) ?? 600
+    let side = M18Layout.keyImageSize
+    func pattern(_ white: (Int, Int) -> Bool) -> Data {
+        var pixels = [UInt8](repeating: 0, count: side * side * 4)
+        for y in 0..<side { for x in 0..<side where white(x, y) {
+            let i = (y * side + x) * 4
+            pixels[i] = 255; pixels[i + 1] = 255; pixels[i + 2] = 255
+        } }
+        for i in stride(from: 3, to: pixels.count, by: 4) { pixels[i] = 255 }
+        let context = CGContext(data: &pixels, width: side, height: side, bitsPerComponent: 8, bytesPerRow: side * 4,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, context.makeImage()!, [kCGImageDestinationLossyCompressionQuality: 1.0] as CFDictionary)
+        CGImageDestinationFinalize(destination)
+        return data as Data
+    }
+    let last = side - 1
+    let patterns: [Int: Data] = [
+        1: pattern { x, _ in x % 2 == 0 },                       // 1-px vertical stripes
+        2: pattern { _, y in y % 2 == 0 },                       // 1-px horizontal stripes
+        3: pattern { x, y in (x + y) % 2 == 0 },                 // 1-px checkerboard
+        4: pattern { x, _ in x / 2 % 2 == 0 },                   // 2-px vertical stripes
+        5: pattern { x, y in x == 0 || y == 0 || x == last || y == last || x == side / 2 || y == side / 2 }, // edge frame + cross
+    ]
+    let device = try M18Device(opening: identity) { _ in }
+    device.setScreenBrightness(80)
+    device.clearKeys(Array(1...15))
+    device.setKeyImages(patterns)
+    print("showing pixel test on the top row for \(Int(seconds)) s")
+    Thread.sleep(forTimeInterval: seconds)
+    device.close(notifyDevice: true)
 case "ledset":
     // Sets one light-strip pattern and leaves it on, for step-by-step checks by eye.
     guard let identity = M18Device.attached().first else {
@@ -223,9 +271,9 @@ case "preview":
 case "run":
     let seconds = arguments.dropFirst().first.flatMap(Double.init) ?? 30
     let controller = DockController(scenes: [
-        probeScene("A", RGB(255, 0, 0), RGB(hex: "#5A1F1F")),
-        probeScene("B", RGB(0, 255, 0), RGB(hex: "#1F5A2A")),
-        probeScene("C", RGB(0, 0, 255), RGB(hex: "#1F2F5A")),
+        probeScene("A", RGB(255, 0, 0)),
+        probeScene("B", RGB(0, 255, 0)),
+        probeScene("C", RGB(0, 0, 255)),
     ], settings: DockSettings(defaults: UserDefaults(suiteName: "StreamDock.probe")!))
     controller.start()
     print("Running for \(Int(seconds))s — press keys")
@@ -246,4 +294,76 @@ default:
 
 extension RhythmState {
     static let allCasesForReport: [RhythmState] = [.calm, .seeking, .locked]
+}
+
+
+/// One key in the preview sheet.
+struct SheetKey {
+    var symbol: String? = nil, value: String? = nil, label: String? = nil, tone: KeyTone = .normal, artwork: Bool = false
+}
+
+@MainActor func writeKeySheet(to path: String, artwork: Data?, pressed: Bool) throws {
+    // What the modules show, in a typical state (HA labels are the user's own names).
+    let daily: [SheetKey] = [
+        .init(symbol: "speaker.wave.1.fill"), .init(value: "45", label: "Volume"), .init(symbol: "speaker.wave.3.fill"),
+        .init(symbol: "hifispeaker", label: "LG Display"), .init(symbol: "mic", label: "DJI Mic"),
+        .init(symbol: "sun.min.fill"), .init(value: "70", label: "Brightness"), .init(symbol: "sun.max.fill"),
+        .init(symbol: "moon.fill", label: "Sleep"), .init(symbol: "mic.slash.fill", label: "Muted", tone: .alert),
+        .init(symbol: "backward.fill"), .init(symbol: "pause.fill"), .init(symbol: "forward.fill"),
+        .init(symbol: "music.note", artwork: true), .init(symbol: "star.fill", label: "Loved", tone: .on),
+    ]
+    let home: [SheetKey] = [
+        .init(value: "26°", label: "A/C", tone: .on), .init(symbol: "minus", label: "A/C"), .init(symbol: "plus", label: "A/C"),
+        .init(value: "Cool", label: "A/C"), .init(symbol: "powerplug.fill", label: "PC", tone: .on),
+        .init(value: "40%", label: "Fan", tone: .on), .init(symbol: "minus", label: "Fan"), .init(symbol: "plus", label: "Fan"),
+        .init(symbol: "arrow.left.and.right", label: "Fan", tone: .on), .init(value: "Natural", label: "Fan"),
+        .init(symbol: "power", label: "Light Bar"), .init(symbol: "sun.min.fill", label: "Light Bar", tone: .dim),
+        .init(symbol: "sun.max.fill", label: "Light Bar", tone: .dim), .init(symbol: "flame.fill", label: "Light Bar", tone: .dim),
+        .init(symbol: "snowflake", label: "Light Bar", tone: .dim),
+    ]
+    let obs: [SheetKey] = [
+        .init(symbol: "record.circle", label: "Recording", tone: .alert), .init(symbol: "pause.fill", label: "Pause"),
+        .init(symbol: "dot.radiowaves.left.and.right", label: "Live", tone: .live), .init(symbol: "rectangle.split.2x1", label: "Studio"),
+        .init(symbol: "arrow.right.square", label: "Transition", tone: .dim),
+        .init(value: "1", label: "Main", tone: .on), .init(value: "2", label: "Desktop"), .init(value: "3", label: "Camera"),
+        .init(value: "4", label: "Unset", tone: .dim), .init(value: "5", label: "Unset", tone: .dim),
+        .init(symbol: "mic.fill", label: "Mic"), .init(symbol: "mic.slash.fill", label: "Desktop", tone: .alert),
+        .init(symbol: "eye.fill", label: "Camera", tone: .on), .init(symbol: "eye.slash", label: "Captions"),
+        .init(symbol: "square.and.arrow.down", label: "Save"),
+    ]
+    func render(_ key: SheetKey) -> CGImage? {
+        KeyDesign.image(symbol: key.symbol, value: key.value, label: key.label, tone: key.tone,
+                        artwork: key.artwork ? artwork : nil, pressed: pressed)
+    }
+    let panels: [(String, [CGImage?])] = [
+        ("第 1 页 · 日常控制", daily.map(render)),
+        ("第 2 页 · 智能家居", home.map(render)),
+        ("第 3 页 · OBS", obs.map(render)),
+    ]
+    let zoom = 3, key = 64 * zoom, gap = 10 * zoom, margin = 40, titleHeight = 56
+    let panelWidth = 5 * key + 4 * gap, panelHeight = titleHeight + 3 * key + 2 * gap
+    let width = 2 * panelWidth + 3 * margin, height = 2 * panelHeight + 3 * margin
+    let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    context.setFillColor(CGColor(gray: 0.12, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    context.interpolationQuality = .none
+    NSGraphicsContext.saveGraphicsState()
+    NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+    for (index, panel) in panels.enumerated() {
+        let originX = margin + (index % 2) * (panelWidth + margin)
+        let top = height - margin - (index / 2) * (panelHeight + margin)
+        NSAttributedString(string: panel.0, attributes: [.font: NSFont.systemFont(ofSize: 26, weight: .semibold), .foregroundColor: NSColor(white: 0.85, alpha: 1)])
+            .draw(at: NSPoint(x: originX, y: top - 36))
+        for (slot, image) in panel.1.enumerated() {
+            let x = originX + (slot % 5) * (key + gap)
+            let y = top - titleHeight - (slot / 5 + 1) * key - (slot / 5) * gap
+            context.setFillColor(CGColor(gray: 0, alpha: 1))
+            context.fill(CGRect(x: x - 8, y: y - 8, width: key + 16, height: key + 16))
+            if let image { context.draw(image, in: CGRect(x: x, y: y, width: key, height: key)) }
+        }
+    }
+    NSGraphicsContext.restoreGraphicsState()
+    let destination = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil)!
+    CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+    guard CGImageDestinationFinalize(destination) else { throw CocoaError(.fileWriteUnknown) }
 }

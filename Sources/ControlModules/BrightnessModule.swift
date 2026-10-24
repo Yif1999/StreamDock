@@ -14,7 +14,6 @@ public final class BrightnessModule: DockModule {
     private var systemDisplay: CGDirectDisplayID?
     private var systemLevel: Float?
     private var poll: Task<Void, Never>?
-    private static let tint = RGB(hex: "#FFD60A")
 
     public init() {}
 
@@ -27,17 +26,12 @@ public final class BrightnessModule: DockModule {
 
     public func face(forSlot slot: Int) -> KeyFace {
         guard let level else {
-            return slot == 1 ? KeyFace(symbol: "sun.max", caption: "不可调", foreground: RGB(hex: "#8E8E93")) : .blank
+            return slot == 1 ? KeyFace(symbol: "sun.max.fill", caption: "Brightness", tone: .dim) : .blank
         }
         switch slot {
-        case 0: return KeyFace(symbol: "sun.min.fill", caption: "−", foreground: Self.tint)
-        case 2: return KeyFace(symbol: "sun.max.fill", caption: "+", foreground: Self.tint)
-        default:
-            return KeyFace(
-                title: "\(Int((level * 100).rounded()))%",
-                caption: systemDisplay.map { CGDisplayIsBuiltin($0) != 0 } == true ? "内置屏" : "外接屏",
-                foreground: Self.tint
-            )
+        case 0: return KeyFace(symbol: "sun.min.fill")
+        case 2: return KeyFace(symbol: "sun.max.fill")
+        default: return KeyFace(title: "\(Int((level * 100).rounded()))", caption: "Brightness")
         }
     }
 

@@ -14,7 +14,6 @@ public final class VolumeModule: DockModule {
     private var context: ModuleContext?
     /// DDC monitors here have no mute command; we mute by going to 0 and remember the level.
     private var monitorLevelBeforeMute: Float?
-    private static let tint = RGB(hex: "#64D2FF")
 
     public init() {}
 
@@ -41,21 +40,18 @@ public final class VolumeModule: DockModule {
     }
 
     public func face(forSlot slot: Int) -> KeyFace {
-        let (level, muted, caption): (Float, Bool, String)
+        let (level, muted): (Float, Bool)
         switch source {
-        case .system(let l, let m): (level, muted, caption) = (l, m, "")
-        case .monitor(let l, let m): (level, muted, caption) = (l, m, " 屏")
+        case .system(let l, let m), .monitor(let l, let m): (level, muted) = (l, m)
         case .none:
-            return slot == 1 ? KeyFace(symbol: "speaker.fill", caption: "不可调", foreground: RGB(hex: "#8E8E93")) : .blank
+            return slot == 1 ? KeyFace(symbol: "speaker.fill", caption: "Volume", tone: .dim) : .blank
         }
         switch slot {
-        case 0: return KeyFace(symbol: "speaker.wave.1.fill", caption: "−", foreground: Self.tint)
-        case 2: return KeyFace(symbol: "speaker.wave.3.fill", caption: "+", foreground: Self.tint)
+        case 0: return KeyFace(symbol: "speaker.wave.1.fill")
+        case 2: return KeyFace(symbol: "speaker.wave.3.fill")
         default:
-            if muted {
-                return KeyFace(symbol: "speaker.slash.fill", caption: "静音", foreground: RGB(hex: "#FF453A"))
-            }
-            return KeyFace(symbol: "speaker.wave.2.fill", caption: "\(Int((level * 100).rounded()))%\(caption)", foreground: Self.tint)
+            if muted { return KeyFace(symbol: "speaker.slash.fill", caption: "Muted", tone: .alert) }
+            return KeyFace(title: "\(Int((level * 100).rounded()))", caption: "Volume")
         }
     }
 

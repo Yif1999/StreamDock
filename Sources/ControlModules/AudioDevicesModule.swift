@@ -17,17 +17,20 @@ public final class AudioDevicesModule: DockModule {
     public func sceneDidActivate() { audio.start(); audio.refresh() }
 
     public func face(forSlot slot: Int) -> KeyFace {
-        let failure = errorSlot == slot ? audio.error : nil
+        // The error text itself is in the settings window; the key only says it failed.
+        let failed = errorSlot == slot && audio.error != nil
         switch slot {
         case 0:
-            return KeyFace(symbol: "speaker.wave.2", caption: failure ?? shortName(audio.output?.name, fallback: "无输出"), foreground: RGB(hex: "#64D2FF"))
+            return KeyFace(symbol: "hifispeaker", caption: failed ? "Failed" : shortName(audio.output?.name, fallback: "No Output"),
+                           tone: audio.output == nil ? .dim : .normal)
         case 1:
-            return KeyFace(symbol: "mic", caption: failure ?? shortName(audio.input?.name, fallback: "无输入"), foreground: RGB(hex: "#64D2FF"))
+            return KeyFace(symbol: "mic", caption: failed ? "Failed" : shortName(audio.input?.name, fallback: "No Input"),
+                           tone: audio.input == nil ? .dim : .normal)
         default:
-            let muted = audio.inputMuted == true
-            return KeyFace(symbol: muted ? "mic.slash.fill" : "mic.fill",
-                           caption: failure ?? (audio.inputMuted == nil ? "不可静音" : muted ? "已静音" : "麦克风"),
-                           foreground: audio.inputMuted == nil ? RGB(hex: "#8E8E93") : muted ? RGB(hex: "#FF453A") : RGB(hex: "#64D2FF"))
+            guard let muted = audio.inputMuted else { return KeyFace(symbol: "mic.fill", caption: "Mic", tone: .dim) }
+            return muted
+                ? KeyFace(symbol: "mic.slash.fill", caption: failed ? "Failed" : "Muted", tone: .alert)
+                : KeyFace(symbol: "mic.fill", caption: failed ? "Failed" : "Mic")
         }
     }
 

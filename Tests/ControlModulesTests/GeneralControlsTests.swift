@@ -46,7 +46,7 @@ struct GeneralControlsTests {
         while module.remaining != nil && ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(30))
         }
-        #expect(module.face(forSlot: 0).caption == "关屏失败")
+        #expect(module.face(forSlot: 0).caption == "Failed")
         module.keyUp(slot: 0)
     }
 
@@ -76,7 +76,7 @@ struct GeneralControlsTests {
     }
 
     @Test func artworkRendersAndInvalidArtworkFallsBack() throws {
-        let source = try #require(KeyRenderer.jpeg(for: KeyFace(title: "封面", background: RGB(220, 30, 60))))
+        let source = try #require(KeyRenderer.jpeg(for: KeyFace(title: "Cover", tone: .alert)))
         let cover = try #require(KeyRenderer.image(for: KeyFace(artwork: source)))
         #expect(cover.width == 64 && cover.height == 64)
         let fallback = try #require(KeyRenderer.jpeg(for: KeyFace(symbol: "music.note", artwork: Data([0, 1]))))

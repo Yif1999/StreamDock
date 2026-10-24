@@ -1,14 +1,20 @@
 # 开发进度
 
-最后整理：2026-10-24。本批开发已收尾，以下描述最终实现；设计细节见 [architecture.md](architecture.md)，音乐分析及 AirPlay 调试记录见 [rhythm.md](rhythm.md)。
+最后整理：2026-10-24。**通用控制场景本批开发已结束**，以下描述最终实现；架构见 [architecture.md](architecture.md)，设计规范见 [design.md](design.md)，音乐分析及 AirPlay 调试记录见 [rhythm.md](rhythm.md)。
 
 ## 当前交付
 
 - 原生 Swift 菜单栏应用，最低 macOS 26；单进程，不添加登录项、launchd 或常驻助手。
 - 通用控制有三页：日常控制 → 智能家居 → 本机 OBS。重复按通用控制圆键翻页，切到其他场景后再回来保留页码。
 - 新版已构建、签名并在本机运行。HA 已认证并读取 151 个实体；本机 OBS 已认证，用户确认录制按键可用。
-- 自动测试共 60 项：RhythmKitTests 15、ControlModulesTests 31、DockCoreTests 14。网络控制测试使用本地模拟服务。
+- 自动测试共 64 项：RhythmKitTests 14、ControlModulesTests 35、DockCoreTests 15。网络控制测试使用本地模拟服务，长按与超时时长在测试中缩短。
 - 用户设备绑定、服务器地址、音频候选设备保存在本机设置；HA 令牌保存在钥匙串。它们不随代码提交，仓库默认 HA 按键为空。
+
+## 按键外观（2026-10-24）
+
+- 统一设计系统（`KeyDesign`）：纯黑底、系统图标、英文标签，颜色只表示状态（开启白、录制/静音红、推流绿、长按琥珀，整键铺满），
+  固定网格与基线，像素对齐，JPEG 全色度，按下整键变暗 30%。完整规范见 [design.md](design.md)。
+- 已确认按键 1:1 点对点显示。打拍按键模块已删除。
 
 ## 第 1 页：日常控制
 

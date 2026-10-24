@@ -41,9 +41,9 @@ public final class DisplaySleepModule: DockModule {
 
     public func face(forSlot slot: Int) -> KeyFace {
         if let remaining {
-            return KeyFace(title: "\(remaining)", caption: "松手取消", foreground: RGB(hex: "#FF9F0A"))
+            return KeyFace(title: "\(remaining)", caption: "Hold", tone: .caution)
         }
-        return KeyFace(symbol: "display", caption: failed ? "关屏失败" : "长按关屏")
+        return KeyFace(symbol: "moon.fill", caption: failed ? "Failed" : "Sleep")
     }
 
     public func keyDown(slot: Int) {
