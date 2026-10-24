@@ -1,0 +1,17 @@
+# Build output
+.build/
+build/
+*.app
+
+# Python tooling
+.venv/
+__pycache__/
+
+# Full vendor SDK (re-clone with scripts/fetch_vendor_sdk.sh); the pieces we build
+# against are copied into ThirdParty/libtransport.
+vendor/
+
+# Editors / OS
+.DS_Store
+.swiftpm/
+*.xcodeproj/xcuserdata/
