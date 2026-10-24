@@ -46,6 +46,12 @@ public final class ModuleContext {
         scene.host?.redraw(keys: keys)
     }
 
+    /// Lets the module paint the light strip while its scene is on screen (nil gives the strip
+    /// back to the scene color). The last module to call this wins within a scene.
+    public func setLight(_ animation: LightAnimation?) {
+        scene?.setLight(animation)
+    }
+
     /// Global alerts work from any scene, active or not.
     public var alerts: AlertCenter? { scene?.host?.alerts }
 }

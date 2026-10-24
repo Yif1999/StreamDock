@@ -19,6 +19,18 @@ public struct RGB: Hashable, Codable, Sendable {
 
     public var hex: String { String(format: "#%02X%02X%02X", red, green, blue) }
 
+    /// Linear blend: `amount` 0 is self, 1 is `other`.
+    public func mixed(with other: RGB, amount: Double) -> RGB {
+        func mix(_ a: UInt8, _ b: UInt8) -> UInt8 { UInt8((Double(a) * (1 - amount) + Double(b) * amount).rounded()) }
+        return RGB(mix(red, other.red), mix(green, other.green), mix(blue, other.blue))
+    }
+
+    /// Dims (or brightens, clamped) by a factor.
+    public func scaled(by factor: Double) -> RGB {
+        func scale(_ value: UInt8) -> UInt8 { UInt8(min(255, max(0, (Double(value) * factor).rounded()))) }
+        return RGB(scale(red), scale(green), scale(blue))
+    }
+
     public static let black = RGB(0, 0, 0)
     public static let white = RGB(255, 255, 255)
 }

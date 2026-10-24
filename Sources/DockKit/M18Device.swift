@@ -144,6 +144,47 @@ public final class M18Device: @unchecked Sendable {
         perform("set_led_color") { transport_set_led_color($0, M18Layout.ledCount, red, green, blue) }
     }
 
+    /// One color per LED (24, running around the base, LED 12 at the middle of the left side).
+    ///
+    /// The vendor SDK only enables this on the N4 Pro. On the M18 a frame is shown only when the
+    /// next per-LED frame arrives, so a static picture must be sent twice (`settle: true`);
+    /// continuous animation needs no special handling.
+    public func setLEDColors(_ colors: [(UInt8, UInt8, UInt8)], settle: Bool = false) {
+        guard !colors.isEmpty else { return }
+        perform("set_single_led_color") { handle in
+            colors.withUnsafeBufferPointer { buffer in
+                var result = transport_set_single_led_color(handle, UInt16(colors.count), buffer.baseAddress!)
+                if settle, result == TRANSPORT_SUCCESS {
+                    result = transport_set_single_led_color(handle, UInt16(colors.count), buffer.baseAddress!)
+                }
+                return result
+            }
+        }
+    }
+
+    /// An animation frame: dropped while the transport is still busy so frames never pile up.
+    public func setLEDFrame(_ colors: [(UInt8, UInt8, UInt8)]) {
+        guard !colors.isEmpty else { return }
+        perform("set_single_led_color") { handle in
+            var canWrite: Int32 = 1
+            if transport_can_write(handle, &canWrite) == TRANSPORT_SUCCESS, canWrite == 0 { return TRANSPORT_SUCCESS }
+            return colors.withUnsafeBufferPointer { transport_set_single_led_color(handle, UInt16(colors.count), $0.baseAddress!) }
+        }
+    }
+
+    /// What the transport reports for `can_write` (nil if the call itself failed). For diagnostics.
+    public func canWrite() -> Int32? {
+        io.sync {
+            var value: Int32 = -1
+            return transport_can_write(handle, &value) == TRANSPORT_SUCCESS ? value : nil
+        }
+    }
+
+    /// Blocks until every queued command has been sent.
+    public func waitUntilIdle() {
+        io.sync {}
+    }
+
     /// 0–100.
     public func setLEDBrightness(_ percent: Int) {
         perform("set_led_brightness") { transport_set_led_brightness($0, UInt8(clamping: percent)) }

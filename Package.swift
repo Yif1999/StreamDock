@@ -35,11 +35,19 @@ let package = Package(
             linkerSettings: [.linkedFramework("IOKit")]
         ),
         .target(name: "DockCore", dependencies: ["DockKit"]),
+        // Rhythm analysis: audio features → tempo, beats, rhythm state. No UI, no device.
+        .target(
+            name: "RhythmKit",
+            linkerSettings: [.linkedFramework("Accelerate")]
+        ),
+        .testTarget(name: "RhythmKitTests", dependencies: ["RhythmKit"]),
+
         .target(
             name: "ControlModules",
-            dependencies: ["DockCore"],
+            dependencies: ["DockCore", "RhythmKit"],
             linkerSettings: [.linkedFramework("CoreAudio"), .linkedFramework("ApplicationServices")]
         ),
+        .testTarget(name: "ControlModulesTests", dependencies: ["ControlModules"]),
 
         // Scenes are isolated from each other: each depends only on core (and shared modules).
         .target(name: "SceneGeneral", dependencies: ["DockCore", "ControlModules"]),
@@ -50,6 +58,6 @@ let package = Package(
             name: "DockApp",
             dependencies: ["DockKit", "DockCore", "SceneGeneral", "SceneVibeCoding", "SceneSynth"]
         ),
-        .executableTarget(name: "DockProbe", dependencies: ["DockKit", "DockCore", "ControlModules"]),
+        .executableTarget(name: "DockProbe", dependencies: ["DockKit", "DockCore", "ControlModules", "RhythmKit"]),
     ]
 )

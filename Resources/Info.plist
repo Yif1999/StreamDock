@@ -23,6 +23,8 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>StreamDock 用 M18 上的按键控制「音乐」App 的播放、暂停和切歌。</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>StreamDock 实时分析「音乐」App 正在播放的声音，让灯带随节奏律动。声音不会被保存或发送。</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSSupportsAutomaticTermination</key>

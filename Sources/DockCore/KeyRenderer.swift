@@ -87,8 +87,4 @@ extension RGB {
         NSColor(srgbRed: CGFloat(red) / 255, green: CGFloat(green) / 255, blue: CGFloat(blue) / 255, alpha: 1)
     }
 
-    func mixed(with other: RGB, amount: Double) -> RGB {
-        func mix(_ a: UInt8, _ b: UInt8) -> UInt8 { UInt8((Double(a) * (1 - amount) + Double(b) * amount).rounded()) }
-        return RGB(mix(red, other.red), mix(green, other.green), mix(blue, other.blue))
-    }
 }

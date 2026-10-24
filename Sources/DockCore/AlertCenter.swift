@@ -1,22 +1,22 @@
 /// Global, scene-independent signals on the light strip (e.g. "a coding task finished").
-/// While an alert runs, scene changes do not touch the strip; when it ends the
-/// active scene's color comes back.
+/// An alert takes over the strip from any scene or animation; when it ends, whatever
+/// was showing fades back in. Each on/off of a flash is eased by the light engine.
 @MainActor
 public final class AlertCenter {
-    var setLED: ((RGB) -> Void)?
-    var restoreLED: (() -> Void)?
+    var onChange: (() -> Void)?
 
-    public private(set) var isFlashing = false
+    /// The color an alert is showing right now, or nil when no alert is running.
+    public private(set) var color: RGB?
+    public var isFlashing: Bool { flashTask != nil }
     private var flashTask: Task<Void, Never>?
 
-    public func flash(_ color: RGB, times: Int = 3, interval: Duration = .milliseconds(220)) {
+    public func flash(_ color: RGB, times: Int = 3, interval: Duration = .milliseconds(450)) {
         flashTask?.cancel()
-        isFlashing = true
         flashTask = Task { [weak self] in
             for _ in 0..<times {
-                self?.setLED?(color)
+                self?.set(color)
                 try? await Task.sleep(for: interval)
-                self?.setLED?(.black)
+                self?.set(.black)
                 try? await Task.sleep(for: interval)
                 if Task.isCancelled { return }
             }
@@ -30,9 +30,14 @@ public final class AlertCenter {
         finish()
     }
 
+    private func set(_ color: RGB) {
+        self.color = color
+        onChange?()
+    }
+
     private func finish() {
         flashTask = nil
-        isFlashing = false
-        restoreLED?()
+        color = nil
+        onChange?()
     }
 }

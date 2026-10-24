@@ -24,6 +24,7 @@ public final class DockController {
     @ObservationIgnored public let alerts = AlertCenter()
 
     @ObservationIgnored private var device: M18Device?
+    @ObservationIgnored private let light = LightEngine()
     @ObservationIgnored private let monitor = DeviceMonitor()
     @ObservationIgnored private var pressedKeys: Set<Int> = []
     @ObservationIgnored private var shownFaces: [Int: ShownFace] = [:]
@@ -43,14 +44,16 @@ public final class DockController {
         self.scenes = scenes
         self.settings = settings
         for scene in scenes { scene.host = self }
-        alerts.setLED = { [weak self] color in self?.device?.setLEDColor(red: color.red, green: color.green, blue: color.blue) }
-        alerts.restoreLED = { [weak self] in self?.applySceneLED() }
+        light.sendSolid = { [weak self] color in self?.device?.setLEDColor(red: color.red, green: color.green, blue: color.blue) }
+        light.sendFrame = { [weak self] frame in self?.device?.setLEDFrame(frame.map { ($0.red, $0.green, $0.blue) }) }
+        alerts.onChange = { [weak self] in self?.updateLight(fade: self?.alerts.color == nil ? 0.6 : 0.18) }
     }
 
     public func start() {
         guard !started else { return }
         started = true
         activeScene.activate()
+        updateLight(fade: 0.5)
         monitor.onArrival = { [weak self] path in self?.deviceArrived(path) }
         monitor.onRemoval = { [weak self] path in self?.deviceRemoved(path) }
         monitor.start()
@@ -65,10 +68,12 @@ public final class DockController {
     /// Restores the light strip, tells the device we are leaving and releases it.
     public func shutdown() {
         alerts.cancel()
+        light.stop()
         reconcileTask?.cancel()
         monitor.stop()
         activeScene.deactivate()
         guard let device else { return }
+        light.fadeOutNow()
         device.resetLEDEffect()
         device.close(notifyDevice: true)
         self.device = nil
@@ -83,7 +88,7 @@ public final class DockController {
         activeScene.deactivate()
         activeSceneIndex = index
         activeScene.activate()
-        applySceneLED()
+        updateLight(fade: 0.5)
         redrawAll()
     }
 
@@ -93,7 +98,7 @@ public final class DockController {
 
     public func setLEDColor(_ color: RGB?, for scene: DockScene) {
         settings.ledColorOverrides[scene.id] = color
-        if scene === activeScene { applySceneLED() }
+        if scene === activeScene { updateLight(fade: 0.4) }
     }
 
     public func setScreenBrightness(_ percent: Int) {
@@ -160,7 +165,7 @@ public final class DockController {
             log.notice("Connected \(identity.path, privacy: .public) fw=\(opened.firmwareVersion, privacy: .public)")
             opened.setScreenBrightness(settings.screenBrightness)
             opened.setLEDBrightness(settings.ledBrightness)
-            applySceneLED()
+            light.fadeInFromBlack()
             shownFaces.removeAll()
             redrawAll()
         } catch {
@@ -211,10 +216,15 @@ public final class DockController {
 
     // MARK: - Drawing
 
-    private func applySceneLED() {
-        guard !alerts.isFlashing else { return }
-        let color = ledColor(for: activeScene)
-        device?.setLEDColor(red: color.red, green: color.green, blue: color.blue)
+    /// Alert > the active scene's animation > the active scene's color.
+    private func updateLight(fade: TimeInterval) {
+        if let color = alerts.color {
+            light.show(.solid(color), fade: fade)
+        } else if let animation = activeScene.light {
+            light.show(.animation(animation), fade: fade)
+        } else {
+            light.show(.solid(ledColor(for: activeScene)), fade: fade)
+        }
     }
 
     private func redrawAll() {
@@ -223,6 +233,10 @@ public final class DockController {
 }
 
 extension DockController: SceneHost {
+    func lightDidChange(in scene: DockScene) {
+        if scene === activeScene { updateLight(fade: 1.5) }
+    }
+
     func redraw(keys: [Int]) {
         guard let device else { return }
         var images: [Int: Data] = [:]

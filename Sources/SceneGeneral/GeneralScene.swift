@@ -12,5 +12,7 @@ public func makeGeneralScene() -> DockScene {
     scene.place(MediaModule(), keys: [1, 2, 3])
     scene.place(VolumeModule(), keys: [6, 7, 8])
     scene.place(BrightnessModule(), keys: [11, 12, 13])
+    // Blank unless a rhythm trace is recording; then tap along to the beat here.
+    scene.place(BeatTapModule(), keys: [15])
     return scene
 }

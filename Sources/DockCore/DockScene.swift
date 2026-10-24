@@ -3,6 +3,7 @@
 protocol SceneHost: AnyObject {
     var alerts: AlertCenter { get }
     func redraw(keys: [Int])
+    func lightDidChange(in scene: DockScene)
 }
 
 /// One full-screen layout bound to a round key. Scenes never see each other:
@@ -16,6 +17,8 @@ open class DockScene {
 
     public private(set) var isActive = false
     weak var host: SceneHost?
+    /// Set by a module; shown instead of `defaultLEDColor` while the scene is active.
+    private(set) var light: LightAnimation?
 
     private var placements: [(module: DockModule, keys: [Int])] = []
     private var slotForKey: [Int: (module: DockModule, slot: Int)] = [:]
@@ -56,6 +59,12 @@ open class DockScene {
     }
 
     func hasModule(onKey key: Int) -> Bool { slotForKey[key] != nil }
+
+    func setLight(_ animation: LightAnimation?) {
+        guard animation !== light else { return }
+        light = animation
+        host?.lightDidChange(in: self)
+    }
 
     func activate() {
         isActive = true
