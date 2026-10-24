@@ -6,7 +6,7 @@ import RhythmKit
 
 private let log = Logger(subsystem: "StreamDock", category: "AudioTap")
 
-/// Live rhythm analysis of the Music app's own output — not the microphone, not other apps —
+/// Live rhythm analysis of Music output, including its shared AirPlay renderer when delegated,
 /// through a Core Audio process tap (macOS 14.2+), feeding RhythmKit on the audio thread.
 /// Needs the "System Audio Recording" permission. Samples are analysed on the fly and never
 /// stored or sent anywhere (a debug trace keeps only feature values, see `RhythmRecorder`).
@@ -17,6 +17,16 @@ final class MusicAudioTap: @unchecked Sendable {
     private let lock = NSLock()
     private var lastSignal: TimeInterval = 0
     private var running = false
+    private var lastCallback: TimeInterval = 0
+    // Accessed only on the control queue.
+    private var route: Route?
+    private var lastAttempt: TimeInterval = 0
+
+    private struct Route: Equatable {
+        let processes: [AudioObjectID]
+        let devices: [AudioObjectID]
+        let outputUID: String?
+    }
     private var pendingEvents: [RhythmEvent] = []
     private var latestSnapshot = RhythmSnapshot()
     private let control = DispatchQueue(label: "StreamDock.AudioTap.control")
@@ -70,10 +80,28 @@ final class MusicAudioTap: @unchecked Sendable {
         return ProcessInfo.processInfo.systemUptime - lastSignal < 2
     }
 
-    func start(pid: pid_t) {
+    /// Re-evaluate Music's actual renderer; AirPlay can move playback into Apple's helper.
+    func start(pid: pid_t, airPlayEnabled: Bool = false) {
         control.async { [self] in
-            guard procID == nil else { return }
-            let started = startNow(pid: pid)
+            let next = Self.captureRoute(pid: pid, airPlayEnabled: airPlayEnabled)
+            let now = ProcessInfo.processInfo.systemUptime
+            lock.lock()
+            let stalled = running && route?.devices.isEmpty == false && now - max(lastCallback, lastAttempt) > 5
+            lock.unlock()
+            guard next != route || procID == nil || stalled else { return }
+            guard now - lastAttempt >= 2 else { return }
+            lastAttempt = now
+            stopNow()
+            lock.lock()
+            running = false
+            lastSignal = 0
+            pendingEvents.removeAll()
+            latestSnapshot = RhythmSnapshot()
+            lock.unlock()
+            route = next
+            guard let next else { return }
+            log.notice("Capture route processes=\(next.processes.description, privacy: .public) devices=\(next.devices.description, privacy: .public)")
+            let started = startNow(route: next)
             lock.lock()
             running = started
             lock.unlock()
@@ -85,19 +113,16 @@ final class MusicAudioTap: @unchecked Sendable {
             stopNow()
             lock.lock()
             running = false
+            lastSignal = 0
+            route = nil
             pendingEvents.removeAll()
             latestSnapshot = RhythmSnapshot()
             lock.unlock()
         }
     }
 
-    private func startNow(pid: pid_t) -> Bool {
-        guard let process = Self.processObject(for: pid) else {
-            log.notice("Music (pid \(pid)) has no audio process object yet")
-            return false
-        }
-
-        let description = CATapDescription(stereoMixdownOfProcesses: [process])
+    private func startNow(route: Route) -> Bool {
+        let description = CATapDescription(stereoMixdownOfProcesses: route.processes)
         description.isPrivate = true
         description.muteBehavior = .unmuted
         var tap = AudioObjectID(kAudioObjectUnknown)
@@ -108,7 +133,7 @@ final class MusicAudioTap: @unchecked Sendable {
         }
         tapID = tap
 
-        var aggregateDescription: [String: Any] = [
+        let aggregateDescription: [String: Any] = [
             kAudioAggregateDeviceNameKey: "StreamDock Music Tap",
             kAudioAggregateDeviceUIDKey: UUID().uuidString,
             kAudioAggregateDeviceIsPrivateKey: true,
@@ -119,11 +144,8 @@ final class MusicAudioTap: @unchecked Sendable {
                 kAudioSubTapUIDKey: description.uuid.uuidString,
             ]],
         ]
-        // Clock the aggregate from the current output device, as Apple's sample does.
-        if let outputUID = Self.defaultOutputUID() {
-            aggregateDescription[kAudioAggregateDeviceMainSubDeviceKey] = outputUID
-            aggregateDescription[kAudioAggregateDeviceSubDeviceListKey] = [[kAudioSubDeviceUIDKey: outputUID]]
-        }
+        // Tap-only aggregate: no physical-device input streams can enter the analysis,
+        // and changing the output clock does not pin capture to the old device.
         var aggregate = AudioObjectID(kAudioObjectUnknown)
         status = AudioHardwareCreateAggregateDevice(aggregateDescription as CFDictionary, &aggregate)
         guard status == noErr else {
@@ -138,9 +160,14 @@ final class MusicAudioTap: @unchecked Sendable {
         var formatAddress = AudioObjectPropertyAddress(
             mSelector: kAudioTapPropertyFormat, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain
         )
-        if AudioObjectGetPropertyData(tap, &formatAddress, 0, nil, &size, &format) == noErr, format.mSampleRate > 0 {
-            ioQueue.sync { sampleRate = format.mSampleRate }
+        guard AudioObjectGetPropertyData(tap, &formatAddress, 0, nil, &size, &format) == noErr,
+              format.mSampleRate > 0, format.mFormatID == kAudioFormatLinearPCM,
+              format.mFormatFlags & kAudioFormatFlagIsFloat != 0, format.mBitsPerChannel == 32 else {
+            log.error("Unsupported tap format")
+            stopNow()
+            return false
         }
+        ioQueue.sync { sampleRate = format.mSampleRate }
         // A fresh analysis per session.
         ioQueue.sync {
             let extractor = FeatureExtractor(sampleRate: sampleRate)
@@ -195,18 +222,21 @@ final class MusicAudioTap: @unchecked Sendable {
     // MARK: - Analysis (IO queue)
 
     private func process(_ input: UnsafePointer<AudioBufferList>) {
+        lock.lock()
+        lastCallback = ProcessInfo.processInfo.systemUptime
+        lock.unlock()
         guard let extractor, let analyzer else { return }
         let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: input))
 
         // Mix down to mono (interleaved or one buffer per channel).
         mono.removeAll(keepingCapacity: true)
         var energy: Float = 0
-        for (index, buffer) in buffers.enumerated() {
+        for buffer in buffers {
             guard let data = buffer.mData else { continue }
             let channels = max(1, Int(buffer.mNumberChannels))
             let samples = data.assumingMemoryBound(to: Float32.self)
             let frames = Int(buffer.mDataByteSize) / MemoryLayout<Float32>.size / channels
-            if index == 0 { mono = [Float](repeating: 0, count: frames) }
+            if mono.isEmpty { mono = [Float](repeating: 0, count: frames) }
             guard frames == mono.count else { continue }
             let scale = 1 / Float(channels * buffers.count)
             for frame in 0..<frames {
@@ -227,6 +257,15 @@ final class MusicAudioTap: @unchecked Sendable {
         }
 
         lock.lock()
+        // A global activity can hide Music for hours. Do not queue old beats for its return.
+        pendingEvents.removeAll { event in
+            let timestamp: Double
+            switch event {
+            case .accent(let time, _), .expectedBeat(let time): timestamp = time
+            case .hit(let hit): timestamp = hit.time
+            }
+            return timestamp < now - 0.25
+        }
         pendingEvents += events
         latestSnapshot = analyzer.snapshot
         if sqrt(energy / Float(mono.count)) > 0.0005 { lastSignal = now }
@@ -234,6 +273,48 @@ final class MusicAudioTap: @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    static func selectProcesses(music: AudioObjectID?, musicHasOutput: Bool,
+                                airPlayEnabled: Bool, activeHelpers: [AudioObjectID]) -> [AudioObjectID] {
+        if airPlayEnabled && !musicHasOutput && !activeHelpers.isEmpty { return activeHelpers }
+        return music.map { [$0] } ?? []
+    }
+
+    private static func captureRoute(pid: pid_t, airPlayEnabled: Bool) -> Route? {
+        let music = processObject(for: pid)
+        let musicOutputs = music.map { objectIDs($0, selector: kAudioProcessPropertyDevices, scope: kAudioDevicePropertyScopeOutput) } ?? []
+        var processes = Self.selectProcesses(music: music, musicHasOutput: !musicOutputs.isEmpty, airPlayEnabled: airPlayEnabled, activeHelpers: [])
+        var outputs = musicOutputs
+        // Only use the shared AirPlay renderer while Music itself confirms AirPlay is enabled
+        // and has no local output. Never fall back to a global/system-wide audio tap.
+        if airPlayEnabled && musicOutputs.isEmpty {
+            let helpers = objectIDs(AudioObjectID(kAudioObjectSystemObject), selector: kAudioHardwarePropertyProcessObjectList)
+                .filter { stringProperty($0, selector: kAudioProcessPropertyBundleID) == "com.apple.AirPlayXPCHelper" }
+            let active = helpers.filter { !objectIDs($0, selector: kAudioProcessPropertyDevices, scope: kAudioDevicePropertyScopeOutput).isEmpty }
+            processes = Self.selectProcesses(music: music, musicHasOutput: false, airPlayEnabled: airPlayEnabled, activeHelpers: active.isEmpty ? helpers : active)
+            outputs = processes.flatMap { objectIDs($0, selector: kAudioProcessPropertyDevices, scope: kAudioDevicePropertyScopeOutput) }
+        }
+        guard !processes.isEmpty else { return nil }
+        return Route(processes: processes.sorted(), devices: Array(Set(outputs)).sorted(), outputUID: defaultOutputUID())
+    }
+
+    private static func objectIDs(_ object: AudioObjectID, selector: AudioObjectPropertySelector,
+                                  scope: AudioObjectPropertyScope = kAudioObjectPropertyScopeGlobal) -> [AudioObjectID] {
+        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: scope, mElement: 0)
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(object, &address, 0, nil, &size) == noErr, size > 0 else { return [] }
+        var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+        let status = ids.withUnsafeMutableBytes { AudioObjectGetPropertyData(object, &address, 0, nil, &size, $0.baseAddress!) }
+        return status == noErr ? ids : []
+    }
+
+    private static func stringProperty(_ object: AudioObjectID, selector: AudioObjectPropertySelector) -> String? {
+        var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal, mElement: 0)
+        var value: Unmanaged<CFString>?
+        var size = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        guard AudioObjectGetPropertyData(object, &address, 0, nil, &size, &value) == noErr else { return nil }
+        return value?.takeRetainedValue() as String?
+    }
 
     private static func processObject(for pid: pid_t) -> AudioObjectID? {
         var address = AudioObjectPropertyAddress(

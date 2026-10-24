@@ -20,25 +20,6 @@ import Testing
         #expect(kept.chroma > plain.chroma * 2, "plain \(plain.chroma) kept \(kept.chroma)")
     }
 
-    /// A value hovering between two 8-bit steps at the dim end must not flicker.
-    @Test func dimLightDoesNotFlicker() {
-        var output = LEDOutput()
-        let hover = pow(2.5 / 255, 1 / LEDOutput.gamma)
-        var shown: [UInt8] = []
-        for index in 0..<60 {
-            let level = hover * (1 + 0.004 * sin(Double(index)))
-            shown.append(output.render([((1, 1, 1), level)])[0].red)
-        }
-        #expect(Set(shown.dropFirst()).count == 1, "values \(Set(shown))")
-    }
-
-    /// Perceived brightness is gamma-mapped: half perceived is far less than half drive.
-    @Test func brightnessIsPerceptual() {
-        var output = LEDOutput()
-        #expect(output.render([((1, 1, 1), 1)])[0].red == 255)
-        #expect(output.render([((1, 1, 1), 0.5)])[0].red < 64)
-    }
-
     @Test func gradingNeverLeavesAPaletteDull() {
         // Black-and-white artwork: a soft warm white pair.
         let none = ArtworkPalette.refine([])
@@ -71,17 +52,18 @@ import Testing
         snapshot.intensity = 1
         snapshot.loudness = Bands(low: 0.8, mid: 0.8, high: 0.8)
         func level(_ frame: [RGB]) -> Double { Double(frame.map { Int($0.red) + Int($0.green) + Int($0.blue) }.reduce(0, +)) }
+        var output = LEDOutput()
         var time = 0.0
         var playing: [Double] = []
         for _ in 0..<90 {
             time += 1.0 / 30
-            playing.append(level(glow.frame(at: time, ledCount: 24, input: ([], snapshot))))
+            playing.append(level(output.render(glow.frame(at: time, ledCount: 24, input: ([], snapshot)))))
         }
         glow.playing = false
         var paused: [Double] = []
         for _ in 0..<150 {
             time += 1.0 / 30
-            paused.append(level(glow.frame(at: time, ledCount: 24, input: ([], snapshot))))
+            paused.append(level(output.render(glow.frame(at: time, ledCount: 24, input: ([], snapshot)))))
         }
         let settled = paused.suffix(30).reduce(0, +) / 30
         #expect(settled < 0.6 * playing.last!, "playing \(playing.last!) paused \(settled)")

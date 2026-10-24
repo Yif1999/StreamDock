@@ -31,25 +31,27 @@ public extension DockModule {
 public final class ModuleContext {
     weak var scene: DockScene?
     let keys: [Int]
+    let page: Int
 
-    init(scene: DockScene, keys: [Int]) {
+    init(scene: DockScene, keys: [Int], page: Int = 0) {
+        self.page = page
         self.scene = scene
         self.keys = keys
     }
 
     /// True while the module's scene is on screen.
-    public var isVisible: Bool { scene?.isActive ?? false }
+    public var isVisible: Bool { scene?.isActive == true && scene?.currentPageIndex == page }
 
     /// Redraws the module's keys. Ignored while the scene is in the background.
     public func setNeedsDisplay() {
-        guard let scene, scene.isActive else { return }
+        guard let scene, isVisible else { return }
         scene.host?.redraw(keys: keys)
     }
 
     /// Lets the module paint the light strip while its scene is on screen (nil gives the strip
     /// back to the scene color). The last module to call this wins within a scene.
     public func setLight(_ animation: LightAnimation?) {
-        scene?.setLight(animation)
+        scene?.setLight(animation, page: page)
     }
 
     /// Global alerts work from any scene, active or not.

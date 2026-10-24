@@ -64,7 +64,7 @@ public final class M18Device: @unchecked Sendable {
     }
 
     /// Opens and initializes the device. Blocks for a few hundred milliseconds; call off the main thread.
-    public init(opening identity: Identity, onInput: @escaping @Sendable (DockInputEvent) -> Void) throws {
+    public init(opening identity: Identity, displayAwake: Bool = true, onInput: @escaping @Sendable (DockInputEvent) -> Void) throws {
         self.identity = identity
         self.onInput = onInput
 
@@ -88,9 +88,15 @@ public final class M18Device: @unchecked Sendable {
 
         do {
             try Self.check(transport_set_reportSize(handle, 513, 1025, 0), "set_reportSize", handle)
-            try Self.check(transport_wakeup_screen(handle), "wakeup_screen", handle)
-            try Self.check(transport_clear_all_keys(handle), "clear_all_keys", handle)
-            try Self.check(transport_refresh(handle), "refresh", handle)
+            if displayAwake {
+                try Self.check(transport_wakeup_screen(handle), "wakeup_screen", handle)
+                try Self.check(transport_clear_all_keys(handle), "clear_all_keys", handle)
+                try Self.check(transport_refresh(handle), "refresh", handle)
+            } else {
+                try Self.check(transport_set_key_brightness(handle, 0), "set_key_brightness", handle)
+                try Self.check(transport_set_led_brightness(handle, 0), "set_led_brightness", handle)
+                try Self.check(transport_sleep(handle), "sleep", handle)
+            }
         } catch {
             _ = transport_destroy(handle)
             throw error
@@ -135,6 +141,9 @@ public final class M18Device: @unchecked Sendable {
         }
     }
 
+    public func sleepScreen() { perform("sleep") { transport_sleep($0) } }
+    public func wakeScreen() { perform("wakeup_screen") { transport_wakeup_screen($0) } }
+
     /// LCD backlight, 0–100.
     public func setScreenBrightness(_ percent: Int) {
         perform("set_key_brightness") { transport_set_key_brightness($0, UInt8(clamping: percent)) }
@@ -144,7 +153,7 @@ public final class M18Device: @unchecked Sendable {
         perform("set_led_color") { transport_set_led_color($0, M18Layout.ledCount, red, green, blue) }
     }
 
-    /// One color per LED (24, running around the base, LED 12 at the middle of the left side).
+    /// One color per LED (24; physical positions are documented in M18Layout).
     ///
     /// The vendor SDK only enables this on the N4 Pro. On the M18 a frame is shown only when the
     /// next per-LED frame arrives, so a static picture must be sent twice (`settle: true`);

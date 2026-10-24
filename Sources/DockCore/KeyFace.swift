@@ -39,6 +39,8 @@ public struct RGB: Hashable, Codable, Sendable {
 public struct KeyFace: Hashable, Sendable {
     /// SF Symbol name.
     public var symbol: String?
+    /// Encoded album artwork, drawn edge to edge.
+    public var artwork: Data?
     /// Large text, shown when there is no symbol.
     public var title: String?
     /// Small text along the bottom edge.
@@ -48,12 +50,14 @@ public struct KeyFace: Hashable, Sendable {
 
     public init(
         symbol: String? = nil,
+        artwork: Data? = nil,
         title: String? = nil,
         caption: String? = nil,
         foreground: RGB = .white,
         background: RGB = RGB(0x1C, 0x1C, 0x1E)
     ) {
         self.symbol = symbol
+        self.artwork = artwork
         self.title = title
         self.caption = caption
         self.foreground = foreground

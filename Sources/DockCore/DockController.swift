@@ -20,8 +20,14 @@ public final class DockController {
     /// Exactly one scene per round key, left to right.
     public let scenes: [DockScene]
     public private(set) var activeSceneIndex = 0
+    public private(set) var activePageIndex = 0
+    public var activePageTitle: String { activeScene.pageTitles[activePageIndex] }
+    public private(set) var displaysSleeping = false
+    @ObservationIgnored public var requestDisplayWake: (() -> Void)?
+    @ObservationIgnored private var wakeGate = WakeKeyGate()
     public let settings: DockSettings
     @ObservationIgnored public let alerts = AlertCenter()
+    @ObservationIgnored public let activities = LightActivityCenter()
 
     @ObservationIgnored private var device: M18Device?
     @ObservationIgnored private let light = LightEngine()
@@ -44,6 +50,13 @@ public final class DockController {
         self.scenes = scenes
         self.settings = settings
         for scene in scenes { scene.host = self }
+        light.sendBrightness = { [weak self] percent in
+            guard let self, let device = self.device else { return }
+            log.notice("LED hardware master=\(percent)% (perceptual brightness applied in frames)")
+            device.setLEDBrightness(percent)
+        }
+        light.setBrightness(settings.ledBrightness)
+        activities.onChange = { [weak self] in self?.updateLight(fade: 0.6) }
         light.sendSolid = { [weak self] color in self?.device?.setLEDColor(red: color.red, green: color.green, blue: color.blue) }
         light.sendFrame = { [weak self] frame in self?.device?.setLEDFrame(frame.map { ($0.red, $0.green, $0.blue) }) }
         alerts.onChange = { [weak self] in self?.updateLight(fade: self?.alerts.color == nil ? 0.6 : 0.18) }
@@ -73,9 +86,11 @@ public final class DockController {
         monitor.stop()
         activeScene.deactivate()
         guard let device else { return }
-        light.fadeOutNow()
-        device.resetLEDEffect()
-        device.close(notifyDevice: true)
+        if !displaysSleeping {
+            light.fadeOutNow()
+            device.resetLEDEffect()
+        }
+        device.close(notifyDevice: !displaysSleeping)
         self.device = nil
         connection = .searching
     }
@@ -83,10 +98,18 @@ public final class DockController {
     // MARK: - Scenes and settings
 
     public func activateScene(at index: Int) {
-        guard scenes.indices.contains(index), index != activeSceneIndex else { return }
+        guard scenes.indices.contains(index) else { return }
         releasePressedKeys()
+        if index == activeSceneIndex {
+            activeScene.advancePage()
+            activePageIndex = activeScene.currentPageIndex
+            updateLight(fade: 0.5)
+            redrawAll()
+            return
+        }
         activeScene.deactivate()
         activeSceneIndex = index
+        activePageIndex = activeScene.currentPageIndex
         activeScene.activate()
         updateLight(fade: 0.5)
         redrawAll()
@@ -103,12 +126,40 @@ public final class DockController {
 
     public func setScreenBrightness(_ percent: Int) {
         settings.screenBrightness = percent
-        device?.setScreenBrightness(percent)
+        if !displaysSleeping { device?.setScreenBrightness(percent) }
     }
 
     public func setLEDBrightness(_ percent: Int) {
         settings.ledBrightness = percent
-        device?.setLEDBrightness(percent)
+        light.setBrightness(percent)
+    }
+
+    /// Suspend output and held actions; keep network state alive for a current redraw on wake.
+    public func setDisplaysSleeping(_ sleeping: Bool) {
+        guard displaysSleeping != sleeping else { return }
+        displaysSleeping = sleeping
+        log.notice("Display sleep=\(sleeping)")
+        if sleeping {
+            wakeGate.suppress(pressedKeys.map(DockKey.lcd))
+            releasePressedKeys()
+            light.suspend()
+            blankDevice()
+        } else {
+            wakeGate.screenDidWake()
+            device?.wakeScreen()
+            device?.setScreenBrightness(settings.screenBrightness)
+            shownFaces.removeAll()
+            redrawAll()
+            light.resume()
+        }
+    }
+
+    private func blankDevice() {
+        device?.setScreenBrightness(0)
+        device?.setLEDBrightness(0)
+        device?.setLEDColor(red: 0, green: 0, blue: 0)
+        device?.sleepScreen()
+        device?.waitUntilIdle()
     }
 
     // MARK: - Device lifecycle
@@ -157,17 +208,21 @@ public final class DockController {
             Task { @MainActor in self?.handle(event) }
         }
         do {
+            let awake = !displaysSleeping
             let opened = try await Task.detached {
-                try M18Device(opening: identity, onInput: onInput)
+                try M18Device(opening: identity, displayAwake: awake, onInput: onInput)
             }.value
             device = opened
             connection = .connected(serial: identity.serialNumber, firmware: opened.firmwareVersion)
             log.notice("Connected \(identity.path, privacy: .public) fw=\(opened.firmwareVersion, privacy: .public)")
-            opened.setScreenBrightness(settings.screenBrightness)
-            opened.setLEDBrightness(settings.ledBrightness)
-            light.fadeInFromBlack()
-            shownFaces.removeAll()
-            redrawAll()
+            if displaysSleeping { blankDevice() }
+            else {
+                opened.wakeScreen()
+                opened.setScreenBrightness(settings.screenBrightness)
+                light.fadeInFromBlack()
+                shownFaces.removeAll()
+                redrawAll()
+            }
         } catch {
             log.error("Open failed (attempt \(attempt)): \(String(describing: error), privacy: .public)")
             if attempt < 3 {
@@ -182,6 +237,7 @@ public final class DockController {
         guard let device, device.identity.path == path else { return }
         log.notice("Device removed: \(path, privacy: .public)")
         releasePressedKeys()
+        wakeGate.reset()
         device.close(notifyDevice: false)
         self.device = nil
         shownFaces.removeAll()
@@ -192,11 +248,17 @@ public final class DockController {
 
     private func handle(_ event: DockInputEvent) {
         guard device != nil else { return }
+        let route = wakeGate.route(event, asleep: displaysSleeping)
+        if route.consume {
+            if route.wake { requestDisplayWake?() }
+            return
+        }
         switch event.key {
         case .round(let number):
             if event.pressed { activateScene(at: number - 1) }
         case .lcd(let key):
             if event.pressed {
+                log.notice("Key \(key) down scene=\(self.activeScene.id, privacy: .public) page=\(self.activePageIndex + 1)")
                 pressedKeys.insert(key)
                 activeScene.keyDown(key)
             } else {
@@ -216,15 +278,10 @@ public final class DockController {
 
     // MARK: - Drawing
 
-    /// Alert > the active scene's animation > the active scene's color.
+    /// Notification > global activity (OBS) > foreground music > idle scene color.
     private func updateLight(fade: TimeInterval) {
-        if let color = alerts.color {
-            light.show(.solid(color), fade: fade)
-        } else if let animation = activeScene.light {
-            light.show(.animation(animation), fade: fade)
-        } else {
-            light.show(.solid(ledColor(for: activeScene)), fade: fade)
-        }
+        light.show(activities.source(alert: alerts.color, sceneAnimation: activeScene.light,
+                                     sceneColor: ledColor(for: activeScene)), fade: fade)
     }
 
     private func redrawAll() {
@@ -238,7 +295,7 @@ extension DockController: SceneHost {
     }
 
     func redraw(keys: [Int]) {
-        guard let device else { return }
+        guard !displaysSleeping, let device else { return }
         var images: [Int: Data] = [:]
         for key in keys {
             let shown = ShownFace(

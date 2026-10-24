@@ -7,10 +7,13 @@ private let log = Logger(subsystem: "StreamDock", category: "Light")
 /// Paints the light strip over time. Modules provide one through `ModuleContext.setLight`.
 @MainActor
 public protocol LightAnimation: AnyObject {
-    /// One color per LED (indexed as on the device; see `LightLayout`) for the given moment.
+    /// One uncorrected color/brightness pixel per LED; only the engine applies gamma.
     /// `time` is in seconds on a steady clock.
-    func colors(at time: TimeInterval, ledCount: Int) -> [RGB]
+    func pixels(at time: TimeInterval, ledCount: Int) -> [LightPixel]
+    var isActive: Bool { get }
 }
+
+public extension LightAnimation { var isActive: Bool { true } }
 
 /// Where the LEDs physically are, for animations that move along the ring.
 public enum LightLayout {
@@ -29,10 +32,18 @@ public enum LightLayout {
 @MainActor
 final class LightEngine {
     enum Source {
-        case solid(RGB)
+        case solid(RGB, active: Bool = false)
         case animation(LightAnimation)
+        @MainActor var isActive: Bool {
+            switch self {
+            case .solid(_, let active): active
+            case .animation(let animation): animation.isActive
+            }
+        }
     }
 
+    /// Hardware master stays at 100%; user/activity gain is mapped once in each output pixel.
+    var sendBrightness: ((Int) -> Void)?
     /// Whole-strip color (applied immediately by the device).
     var sendSolid: ((RGB) -> Void)?
     /// Per-LED animation frame (may be dropped if the device is busy).
@@ -42,29 +53,50 @@ final class LightEngine {
 
     let ledCount = Int(M18Layout.ledCount)
     private var source: Source = .solid(.black)
-    private var shown: [RGB]
-    private var fadeFrom: [RGB]?
+    private var output = LEDOutput()
+    private var suspended = false
+    private var shown: [LightPixel]
+    private var fadeFrom: [LightPixel]?
     private var fadeStart: TimeInterval = 0
     private var fadeDuration: TimeInterval = 0
     private var ticker: Task<Void, Never>?
     private var framesSent = 0
     private var lastReport: TimeInterval = 0
+    private var brightness = LightBrightness()
+    private var brightnessSetting = 100
+    private var lastSentBrightness: Int?
+    private var shownGain = 0.5
+    private let clock: () -> TimeInterval
+    private let automaticTicks: Bool
 
-    init() {
+    init(clock: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }, automaticTicks: Bool = true) {
+        self.clock = clock
+        self.automaticTicks = automaticTicks
         shown = Array(repeating: .black, count: ledCount)
     }
 
     func show(_ newSource: Source, fade: TimeInterval) {
         switch newSource {
-        case .solid(let color): log.notice("Show solid \(color.hex, privacy: .public) fade=\(fade)")
+        case .solid(let color, _): log.notice("Show solid \(color.hex, privacy: .public) fade=\(fade)")
         case .animation(let animation): log.notice("Show animation \(String(describing: type(of: animation)), privacy: .public) fade=\(fade)")
         }
         source = newSource
+        guard !suspended else { return }
         beginFade(from: shown, duration: fade)
     }
 
+    func setBrightness(_ percent: Int) {
+        brightnessSetting = min(100, max(0, percent))
+        render()
+        startTicking()
+    }
+
+    func suspend() { suspended = true; stop() }
+    func resume() { suspended = false; fadeInFromBlack() }
+
     /// After the device (re)connects: fade the current state in from dark.
     func fadeInFromBlack(duration: TimeInterval = 0.8) {
+        lastSentBrightness = nil
         beginFade(from: Array(repeating: .black, count: ledCount), duration: duration)
     }
 
@@ -72,12 +104,12 @@ final class LightEngine {
     func fadeOutNow(duration: TimeInterval = 0.4) {
         stop()
         let from = shown
-        let start = Self.now
+        let start = clock()
         var progress = 0.0
         while progress < 1 {
-            progress = min(1, (Self.now - start) / duration)
+            progress = min(1, (clock() - start) / duration)
             let eased = Self.ease(progress)
-            sendFrame?(from.map { $0.mixed(with: .black, amount: eased) })
+            sendFrame?(output.render(from.map { $0.mixed(with: .black, amount: eased) }, gain: shownGain))
             Thread.sleep(forTimeInterval: 1.0 / 30)
         }
         // Per-LED frames show one frame late on the M18; settle on black with a solid command.
@@ -85,9 +117,9 @@ final class LightEngine {
         shown = Array(repeating: .black, count: ledCount)
     }
 
-    private func beginFade(from start: [RGB], duration: TimeInterval) {
+    private func beginFade(from start: [LightPixel], duration: TimeInterval) {
         fadeFrom = start
-        fadeStart = Self.now
+        fadeStart = clock()
         fadeDuration = max(duration, Self.minimumFade)
         render()
         startTicking()
@@ -103,16 +135,16 @@ final class LightEngine {
     }
 
     private var needsTicking: Bool {
-        if fadeFrom != nil { return true }
+        if fadeFrom != nil || brightness.isAnimating(at: clock()) { return true }
         if case .animation = source { return true }
         return false
     }
 
     private func startTicking() {
-        guard ticker == nil else { return }
+        guard !suspended, automaticTicks, ticker == nil else { return }
         ticker = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(33))
+                do { try await Task.sleep(for: .milliseconds(33)) } catch { return }
                 guard let self else { return }
                 self.render()
                 if !self.needsTicking {
@@ -123,12 +155,23 @@ final class LightEngine {
         }
     }
 
-    private func render() {
-        let now = Self.now
-        var frame: [RGB]
+    func render() {
+        guard !suspended else { return }
+        let now = clock()
+        let target = Double(brightnessSetting) * (source.isActive ? 1 : 0.5)
+        if target != brightness.target {
+            log.notice("Perceived brightness target=\(target)% setting=\(self.brightnessSetting)% active=\(self.source.isActive)")
+        }
+        brightness.setTarget(target, at: now)
+        shownGain = min(Double(brightnessSetting), max(0, brightness.level(at: now))) / 100
+        if lastSentBrightness != 100 {
+            sendBrightness?(100)
+            lastSentBrightness = 100
+        }
+        var frame: [LightPixel]
         switch source {
-        case .solid(let color): frame = Array(repeating: color, count: ledCount)
-        case .animation(let animation): frame = animation.colors(at: now, ledCount: ledCount)
+        case .solid(let color, _): frame = Array(repeating: LightPixel(color), count: ledCount)
+        case .animation(let animation): frame = animation.pixels(at: now, ledCount: ledCount)
         }
         if let from = fadeFrom {
             let progress = min(1, (now - fadeStart) / fadeDuration)
@@ -138,18 +181,18 @@ final class LightEngine {
         }
         shown = frame
 
-        if fadeFrom == nil, case .solid(let color) = source {
-            sendSolid?(color)
+        let rendered = output.render(frame, gain: shownGain)
+        if fadeFrom == nil, case .solid = source {
+            sendSolid?(rendered[0])
         } else {
-            sendFrame?(frame)
+            sendFrame?(rendered)
             framesSent += 1
             if now - lastReport > 5 {
-                log.notice("Sent \(self.framesSent) frames, first LED \(frame[0].hex, privacy: .public)")
+                log.notice("Sent \(self.framesSent) frames, first LED \(rendered[0].hex, privacy: .public)")
                 framesSent = 0
                 lastReport = now
             }
         }
     }
 
-    private static var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 }

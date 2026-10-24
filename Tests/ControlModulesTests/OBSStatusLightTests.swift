@@ -1,0 +1,44 @@
+import Testing
+import DockCore
+@testable import ControlModules
+
+@MainActor
+struct OBSStatusLightTests {
+    @Test func recordingBreathesWithoutGoingDarkAndPauseIsAmber() {
+        let light = OBSStatusLight(state: OBSOutputState(recording: true))
+        let bright = light.colors(at: 0.5, ledCount: 24)
+        let dim = light.colors(at: 1.5, ledCount: 24)
+        #expect(bright.allSatisfy { $0 == OBSStatusLight.recordingColor })
+        #expect(dim[0].red >= 127 && dim[0].red <= 128)
+        let paused = OBSStatusLight(state: OBSOutputState(recording: true, paused: true))
+        #expect(paused.isActive)
+        #expect(paused.colors(at: 0.5, ledCount: 24) == paused.colors(at: 1.5, ledCount: 24))
+        #expect(paused.colors(at: 0.5, ledCount: 24)[0] == OBSStatusLight.pausedColor)
+    }
+
+    @Test func simultaneousOutputsSplitRingAndBarsWithSynchronizedBreath() {
+        let light = OBSStatusLight(state: OBSOutputState(recording: true, streaming: true))
+        let colors = light.colors(at: 0.5, ledCount: 24)
+        #expect(colors[LightLayout.leftBar] == OBSStatusLight.recordingColor)
+        #expect(colors[LightLayout.rightBar] == OBSStatusLight.streamingColor)
+        // Both half-rings must agree: 21/0 left, 10/11 right; 5/16 are seams.
+        for index in [0, 1, 4, 17, 21] {
+            #expect(colors[LightLayout.ring[index]].red > colors[LightLayout.ring[index]].green)
+        }
+        for index in [6, 10, 11, 12, 15] {
+            #expect(colors[LightLayout.ring[index]].green > colors[LightLayout.ring[index]].red)
+        }
+        let paused = OBSStatusLight(state: OBSOutputState(recording: true, paused: true, streaming: true))
+        #expect(paused.colors(at: 1.5, ledCount: 24)[LightLayout.leftBar] == OBSStatusLight.pausedColor)
+        #expect(paused.colors(at: 1.5, ledCount: 24)[LightLayout.rightBar] != OBSStatusLight.streamingColor)
+    }
+
+    @Test func streamingIsGreenAndMusicPauseIsInactive() {
+        let stream = OBSStatusLight(state: OBSOutputState(streaming: true))
+        #expect(stream.colors(at: 0.5, ledCount: 24).allSatisfy { $0 == OBSStatusLight.streamingColor })
+        let music = MusicGlow(palette: [.white])
+        #expect(music.isActive)
+        music.playing = false
+        #expect(!music.isActive)
+    }
+}

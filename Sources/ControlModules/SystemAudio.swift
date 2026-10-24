@@ -57,13 +57,14 @@ final class SystemAudio {
         }
     }
 
-    /// Steps by 1/16 like the keyboard volume keys; raising the volume unmutes.
+    /// Two percent per step; raising the volume unmutes.
     func step(by steps: Int) {
         guard let current = volume else { return }
-        let target = min(1, max(0, ((current * 16).rounded() + Float(steps)) / 16))
+        let target = min(1, max(0, current + Float(steps) * 0.02))
         if steps > 0, isMuted { setMuted(false) }
         var value = target
         AudioObjectSetPropertyData(device, &Self.volumeAddress, 0, nil, UInt32(MemoryLayout<Float32>.size), &value)
+        refresh()
     }
 
     func toggleMute() {

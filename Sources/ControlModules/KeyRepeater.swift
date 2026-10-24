@@ -3,14 +3,16 @@
 final class KeyRepeater {
     private var task: Task<Void, Never>?
 
-    func start(_ action: @escaping @MainActor () -> Void) {
+    func start(accelerating: Bool = false, _ action: @escaping @MainActor () -> Void) {
         stop()
         action()
         task = Task {
             try? await Task.sleep(for: .milliseconds(400))
+            var repeats = 0
             while !Task.isCancelled {
                 action()
-                try? await Task.sleep(for: .milliseconds(90))
+                repeats += 1
+                try? await Task.sleep(for: .milliseconds(accelerating && repeats >= 12 ? 45 : 90))
             }
         }
     }

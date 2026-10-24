@@ -75,6 +75,51 @@ final class AppleMusic {
     func next() { run("next track", launching: false) }
     func previous() { run("previous track", launching: false) }
 
+    struct Favorite: Equatable, Sendable {
+        let id: String
+        let enabled: Bool
+    }
+
+    func favorite() async -> Favorite? {
+        guard isRunning, track != nil else { return nil }
+        let result = await execute("""
+        tell application id "com.apple.Music"
+            set t to current track
+            return {persistent ID of t, favorited of t as string}
+        end tell
+        """)
+        guard result.error == nil, result.strings.count == 2,
+              ["true", "false"].contains(result.strings[1]) else { return nil }
+        return Favorite(id: result.strings[0], enabled: result.strings[1] == "true")
+    }
+
+    /// Bind the write to the track shown when the button was pressed, even across a skip.
+    func toggleFavorite(_ favorite: Favorite) async -> Bool {
+        guard isRunning, !favorite.id.isEmpty,
+              favorite.id.allSatisfy({ $0.isHexDigit }) else { return false }
+        let result = await execute("""
+        tell application id "com.apple.Music"
+            set t to current track
+            if persistent ID of t is not "\(favorite.id)" then return "changed"
+            set favorited of t to not (favorited of t)
+            return "ok"
+        end tell
+        """)
+        return result.error == nil && result.strings.first == "ok"
+    }
+
+    func airPlayEnabled() async -> Bool {
+        guard isRunning else { return false }
+        let result = await execute("tell application id \"com.apple.Music\" to get AirPlay enabled as string")
+        return result.error == nil && result.strings.first == "true"
+    }
+
+    func revealCurrentTrack() {
+        guard isRunning else { return }
+        run("activate", launching: false)
+        run("reveal current track", launching: false)
+    }
+
     /// Opens Privacy & Security → Automation.
     func openPermissionSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)

@@ -36,6 +36,14 @@ public enum KeyRenderer {
         background.nsColor.setFill()
         NSRect(x: 0, y: 0, width: size, height: size).fill()
 
+        if let data = face.artwork, let artwork = NSImage(data: data), artwork.size.width > 0, artwork.size.height > 0 {
+            let side = min(artwork.size.width, artwork.size.height)
+            artwork.draw(in: NSRect(x: 0, y: 0, width: size, height: size),
+                         from: NSRect(x: (artwork.size.width - side) / 2, y: (artwork.size.height - side) / 2, width: side, height: side),
+                         operation: .sourceOver, fraction: pressed ? 0.65 : 1, respectFlipped: true, hints: nil)
+            return context.makeImage()
+        }
+
         let contentRect = face.caption == nil
             ? NSRect(x: 4, y: 4, width: size - 8, height: size - 8)
             : NSRect(x: 4, y: 4, width: size - 8, height: size - 22)

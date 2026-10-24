@@ -13,6 +13,9 @@ private let log = Logger(subsystem: "StreamDock", category: "Music")
 @MainActor
 final class ArtworkLoader {
     private var cache: [String: [RGB]] = [:]
+    private var images: [String: Data] = [:]
+
+    func image(for track: AppleMusic.Track) -> Data? { images["\(track.artist)\u{1F}\(track.album)"] }
 
     /// Storefronts to try: the user's own first, then large catalogs. There is no iTunes
     /// Store in China, so CN rarely answers.
@@ -42,6 +45,7 @@ final class ArtworkLoader {
         }
         let palette = ArtworkPalette.colors(from: data)
         cache[key] = palette
+        images[key] = data
         return palette
     }
 

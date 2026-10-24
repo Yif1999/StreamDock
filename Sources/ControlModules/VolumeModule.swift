@@ -61,8 +61,8 @@ public final class VolumeModule: DockModule {
 
     public func keyDown(slot: Int) {
         switch slot {
-        case 0: repeater.start { [weak self] in self?.step(by: -1) }
-        case 2: repeater.start { [weak self] in self?.step(by: 1) }
+        case 0: repeater.start(accelerating: true) { [weak self] in self?.step(by: -1) }
+        case 2: repeater.start(accelerating: true) { [weak self] in self?.step(by: 1) }
         default: toggleMute()
         }
     }
@@ -89,7 +89,7 @@ public final class VolumeModule: DockModule {
             // Like the system keys: raising the volume unmutes.
             let base = monitorLevelBeforeMute.map { steps > 0 ? $0 : 0 } ?? level
             monitorLevelBeforeMute = nil
-            monitor.set(((base * 16).rounded() + Float(steps)) / 16)
+            monitor.set(base + Float(steps) * 0.02)
         case .none:
             break
         }

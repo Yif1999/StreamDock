@@ -1,17 +1,58 @@
 import AppKit
 import ApplicationServices
 import CoreServices
+import ControlModules
 import DockCore
 import SwiftUI
 
 struct SettingsView: View {
-    static let windowID = "settings"
-
     let controller: DockController
+    @AppStorage("settingsPane") private var pane = "general"
     @State private var musicPermission = Self.musicAutomationStatus()
 
     var body: some View {
-        Form {
+        TabView(selection: $pane) {
+            Form { generalControls }
+                .tabItem { Label("通用", systemImage: "gearshape") }.tag("general")
+            Form {
+                Section("场景灯光") {
+                    ForEach(controller.scenes.indices, id: \.self) { sceneRow($0) }
+                }
+                Section("翻页") {
+                    Text("设备下方三个圆键切换场景；重复按当前场景的圆键循环翻页。")
+                    LabeledContent("通用控制", value: "日常控制 → 智能家居 → OBS")
+                }
+            }.tabItem { Label("场景", systemImage: "square.grid.2x2") }.tag("scenes")
+            Form {
+                Section {
+                    audioChoices(input: false)
+                } footer: { Text("勾选多个候选设备后，输出切换键会依次轮换。勾选不会改变当前输出，也不会同时播放。") }
+                Section {
+                    audioChoices(input: true)
+                } footer: { Text("输入切换键只在勾选且在线的设备之间轮换。麦克风静音作用于当前系统输入设备。") }
+            }.tabItem { Label("音频", systemImage: "speaker.wave.2") }.tag("audio")
+            Form { HASettingsSection() }
+                .tabItem { Label("智能家居", systemImage: "house") }.tag("home")
+            Form { OBSSettingsSection() }
+                .tabItem { Label("OBS", systemImage: "video") }.tag("obs")
+        }
+        .formStyle(.grouped)
+        .frame(width: 640, height: 580)
+        .task {
+            AudioDevices.shared.start()
+            while !Task.isCancelled {
+                musicPermission = Self.musicAutomationStatus()
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            }
+        }
+        .onAppear {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate()
+        }
+        .onDisappear { NSApp.setActivationPolicy(.accessory) }
+    }
+
+    @ViewBuilder private var generalControls: some View {
             Section {
                 DeviceHeader(connection: controller.connection, large: true)
                     .padding(.vertical, 4)
@@ -35,14 +76,9 @@ struct SettingsView: View {
                 }
             }
 
-            Section {
-                ForEach(controller.scenes.indices, id: \.self) { index in
-                    sceneRow(index)
-                }
-            } header: {
-                Text("场景")
-            } footer: {
-                Text("设备下方三个圆键从左到右切换场景，灯条颜色跟随当前场景。")
+            Section("屏幕联动") {
+                Text("随电脑屏幕休眠关闭按键屏幕和灯带，唤醒后恢复。控制器第一次按键仅唤醒屏幕，松手后再按才执行原功能。")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("权限") {
@@ -64,23 +100,18 @@ struct SettingsView: View {
                 Text("媒体键只控制 Apple Music，需要「自动化」权限。")
                     .font(.caption).foregroundStyle(.secondary)
             }
-        }
-        .formStyle(.grouped)
-        .frame(width: 480)
-        .fixedSize(horizontal: false, vertical: true)
-        .task {
-            while !Task.isCancelled {
-                musicPermission = Self.musicAutomationStatus()
-                try? await Task.sleep(for: .seconds(2))
-            }
-        }
-        // Show in the Dock and ⌘-Tab only while this window is open.
-        .onAppear {
-            NSApp.setActivationPolicy(.regular)
-            NSApp.activate()
-        }
-        .onDisappear {
-            NSApp.setActivationPolicy(.accessory)
+    }
+
+    @ViewBuilder
+    private func audioChoices(input: Bool) -> some View {
+        let audio = AudioDevices.shared
+        Text(input ? "参与轮换的输入设备" : "参与轮换的输出设备").font(.headline)
+        ForEach(audio.devices.filter { input ? $0.input : $0.output }) { device in
+            Toggle(device.name, isOn: Binding(
+                get: { audio.isSelected(device, input: input) },
+                set: { audio.select(device, input: input, enabled: $0) }
+            ))
+            .toggleStyle(.checkbox)
         }
     }
 

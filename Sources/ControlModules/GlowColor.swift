@@ -105,28 +105,3 @@ struct OKLab: Equatable {
         return UInt8((encoded * 255).rounded())
     }
 }
-
-/// Turns perceived brightness into LED drive levels and 8-bit values.
-///
-/// LEDs are driven linearly but the eye is not: all of `GlowBudget`'s levels are *perceived*
-/// brightness, raised to `gamma` only here, so fades look even and dim light stays fine-grained.
-/// At the dim end 8 bits leave few steps (1, 2, 3 …), and a value hovering between two of them
-/// would flicker; each channel therefore only moves once the wanted value is `hysteresis`
-/// steps away from what it shows.
-struct LEDOutput {
-    static let gamma = 2.2
-    static let hysteresis = 0.7
-    private var held: [Double] = []
-
-    mutating func render(_ pixels: [(channels: (Double, Double, Double), level: Double)]) -> [RGB] {
-        if held.count != pixels.count * 3 { held = Array(repeating: 0, count: pixels.count * 3) }
-        return pixels.enumerated().map { index, pixel in
-            let drive = pow(min(1, max(0, pixel.level)), Self.gamma) * 255
-            let wanted = [pixel.channels.0 * drive, pixel.channels.1 * drive, pixel.channels.2 * drive]
-            for channel in 0..<3 where abs(wanted[channel] - held[index * 3 + channel]) >= Self.hysteresis {
-                held[index * 3 + channel] = wanted[channel].rounded()
-            }
-            return RGB(UInt8(held[index * 3]), UInt8(held[index * 3 + 1]), UInt8(held[index * 3 + 2]))
-        }
-    }
-}

@@ -35,6 +35,7 @@ let package = Package(
             linkerSettings: [.linkedFramework("IOKit")]
         ),
         .target(name: "DockCore", dependencies: ["DockKit"]),
+        .testTarget(name: "DockCoreTests", dependencies: ["DockCore"]),
         // Rhythm analysis: audio features → tempo, beats, rhythm state. No UI, no device.
         .target(
             name: "RhythmKit",
@@ -47,7 +48,7 @@ let package = Package(
             dependencies: ["DockCore", "RhythmKit"],
             linkerSettings: [.linkedFramework("CoreAudio"), .linkedFramework("ApplicationServices")]
         ),
-        .testTarget(name: "ControlModulesTests", dependencies: ["ControlModules"]),
+        .testTarget(name: "ControlModulesTests", dependencies: ["ControlModules"], exclude: ["OBSFixture.py", "HAFixture.py"]),
 
         // Scenes are isolated from each other: each depends only on core (and shared modules).
         .target(name: "SceneGeneral", dependencies: ["DockCore", "ControlModules"]),
@@ -56,7 +57,7 @@ let package = Package(
 
         .executableTarget(
             name: "DockApp",
-            dependencies: ["DockKit", "DockCore", "SceneGeneral", "SceneVibeCoding", "SceneSynth"]
+            dependencies: ["DockKit", "DockCore", "ControlModules", "SceneGeneral", "SceneVibeCoding", "SceneSynth"]
         ),
         .executableTarget(name: "DockProbe", dependencies: ["DockKit", "DockCore", "ControlModules", "RhythmKit"]),
     ]

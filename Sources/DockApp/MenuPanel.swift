@@ -5,13 +5,16 @@ import SwiftUI
 /// The menu bar panel: device state, scene tiles, the two brightness sliders, settings and quit.
 struct MenuPanel: View {
     let controller: DockController
-    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             DeviceHeader(connection: controller.connection)
 
             ScenePicker(controller: controller)
+            if controller.activeScene.pageTitles.count > 1 {
+                Text("\(controller.activePageTitle) · \(controller.activePageIndex + 1)/\(controller.activeScene.pageTitles.count) · 再按场景按钮翻页")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
 
             VStack(spacing: 10) {
                 PercentSlider(symbol: "sun.max.fill", title: "按键屏幕亮度", value: controller.settings.screenBrightness, set: controller.setScreenBrightness)
@@ -20,11 +23,8 @@ struct MenuPanel: View {
 
             GlassEffectContainer {
                 HStack {
-                    Button {
-                        openWindow(id: SettingsView.windowID)
-                        NSApp.activate()
-                    } label: {
-                        Label("设置…", systemImage: "gearshape")
+                    SettingsLink {
+                        Label("设置", systemImage: "gearshape")
                     }
                     .keyboardShortcut(",")
                     Spacer()

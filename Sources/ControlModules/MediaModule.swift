@@ -11,7 +11,7 @@ private let log = Logger(subsystem: "StreamDock", category: "Music")
 /// color — after a grace period, since Music reports "stopped" for a moment between tracks.
 @MainActor
 public final class MediaModule: DockModule {
-    public let keyCount = 3
+    public let keyCount = 5
 
     private let music = AppleMusic()
     private let artwork = ArtworkLoader()
@@ -23,6 +23,13 @@ public final class MediaModule: DockModule {
     private var visible = false
     private var paletteTrack: AppleMusic.Track?
     private var context: ModuleContext?
+    private var cover: Data?
+    private var favorite: AppleMusic.Favorite?
+    private var favoriteTask: Task<Void, Never>?
+    private var favoriteBusy = false
+    private var favoriteFailed = false
+    private var displayedTrack: AppleMusic.Track?
+
     private static let tint = RGB(hex: "#FF375F")
     private static let dimmed = RGB(hex: "#8E8E93")
 
@@ -31,6 +38,7 @@ public final class MediaModule: DockModule {
     public func attach(_ context: ModuleContext) {
         self.context = context
         music.onChange = { [weak self] in
+            self?.trackDidChange()
             self?.context?.setNeedsDisplay()
             self?.updateGlow()
         }
@@ -39,6 +47,15 @@ public final class MediaModule: DockModule {
     public func face(forSlot slot: Int) -> KeyFace {
         if music.permission == .denied {
             return KeyFace(symbol: symbol(forSlot: slot), caption: slot == 1 ? "需授权" : nil, foreground: RGB(hex: "#FF9F0A"))
+        }
+        if slot == 3 {
+            return KeyFace(symbol: "music.note", artwork: cover, caption: cover == nil ? "正在播放" : nil,
+                           foreground: music.track == nil ? Self.dimmed : .white)
+        }
+        if slot == 4 {
+            return KeyFace(symbol: favorite?.enabled == true ? "star.fill" : "star",
+                           caption: favoriteBusy ? "处理中" : favoriteFailed ? "重试" : favorite == nil ? "不可用" : "喜爱",
+                           foreground: favorite == nil ? Self.dimmed : favorite?.enabled == true ? Self.tint : .white)
         }
         let running = music.state != .notRunning
         switch slot {
@@ -61,7 +78,20 @@ public final class MediaModule: DockModule {
         switch slot {
         case 0: music.previous()
         case 1: music.playPause()
-        default: music.next()
+        case 2: music.next()
+        case 3: music.revealCurrentTrack()
+        case 4:
+            guard let favorite, !favoriteBusy else { return }
+            favoriteBusy = true
+            context?.setNeedsDisplay()
+            Task {
+                let success = await music.toggleFavorite(favorite)
+                favoriteFailed = !success
+                await refreshFavorite()
+                favoriteBusy = false
+                context?.setNeedsDisplay()
+            }
+        default: break
         }
     }
 
@@ -70,17 +100,43 @@ public final class MediaModule: DockModule {
         visible = true
         music.startObserving()
         updateGlow()
+        favoriteTask?.cancel()
+        favoriteTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.refreshFavorite()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
     }
 
     public func sceneDidDeactivate() {
         visible = false
+        favoriteTask?.cancel()
+        favoriteTask = nil
         stopAudio()
+    }
+
+    private func trackDidChange() {
+        guard displayedTrack != music.track else { return }
+        displayedTrack = music.track
+        paletteTrack = nil
+        cover = nil
+        favorite = nil
+        favoriteFailed = false
+    }
+
+    private func refreshFavorite() async {
+        let track = music.track
+        let value = await music.favorite()
+        guard track == music.track else { return }
+        favorite = value
+        context?.setNeedsDisplay()
     }
 
     private static let lightOffDelay = 2.5
 
     private func updateGlow() {
-        guard music.state == .playing, let track = music.track else {
+        guard music.state == .playing || music.state == .paused, let track = music.track else {
             glow?.playing = false
             scheduleAudioStop()
             if music.state == .paused, music.track != nil {
@@ -93,8 +149,8 @@ public final class MediaModule: DockModule {
         }
         lightOffTask?.cancel()
         lightOffTask = nil
-        glow?.playing = true
-        if visible { startAudio() }
+        glow?.playing = music.state == .playing
+        if visible && music.state == .playing { startAudio() } else { scheduleAudioStop() }
         if let glow { context?.setLight(glow) }
         guard track != paletteTrack else { return }
         paletteTrack = track
@@ -102,6 +158,8 @@ public final class MediaModule: DockModule {
             let palette = await artwork.palette(for: track, from: music)
             log.notice("Palette for \(track.artist, privacy: .public) – \(track.album, privacy: .public): \(palette.map(\.hex).joined(separator: " "), privacy: .public)")
             guard music.track == track else { return }
+            cover = artwork.image(for: track)
+            context?.setNeedsDisplay()
             if let glow {
                 glow.setPalette(palette)
             } else {
@@ -110,9 +168,10 @@ public final class MediaModule: DockModule {
                     let input = audio.drain()
                     return audio.hasSignal ? input : nil
                 }
+                glow.playing = music.state == .playing
                 self.glow = glow
             }
-            if music.state == .playing { context?.setLight(glow) }
+            if music.state == .playing || music.state == .paused { context?.setLight(glow) }
         }
     }
 
@@ -124,14 +183,13 @@ public final class MediaModule: DockModule {
         audioStopTask = nil
         guard audioTask == nil else { return }
         audioTask = Task { [weak self] in
-            var attempts = 0
             while let self, !Task.isCancelled {
-                if !self.audio.isRunning, attempts < 5,
-                   let pid = NSRunningApplication.runningApplications(withBundleIdentifier: AppleMusic.bundleID).first?.processIdentifier {
-                    attempts += 1
-                    self.audio.start(pid: pid)
+                if let pid = NSRunningApplication.runningApplications(withBundleIdentifier: AppleMusic.bundleID).first?.processIdentifier {
+                    let airPlay = await self.music.airPlayEnabled()
+                    guard !Task.isCancelled, self.visible else { return }
+                    if self.music.state == .playing { self.audio.start(pid: pid, airPlayEnabled: airPlay) }
                 }
-                try? await Task.sleep(for: .seconds(self.audio.isRunning ? 5 : 1))
+                try? await Task.sleep(for: .seconds(2))
                 if self.audio.isRunning {
                     let rhythm = self.audio.snapshot
                     let bpm = rhythm.bpm.map { String(format: "%.0f", $0) } ?? "-"
@@ -177,6 +235,8 @@ public final class MediaModule: DockModule {
         switch slot {
         case 0: "backward.fill"
         case 2: "forward.fill"
+        case 3: "music.note"
+        case 4: "star"
         default: music.state == .playing ? "pause.fill" : "play.fill"
         }
     }

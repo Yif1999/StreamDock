@@ -1,5 +1,6 @@
 import AppKit
 import DockCore
+import ControlModules
 import SceneGeneral
 import SceneSynth
 import SceneVibeCoding
@@ -17,11 +18,10 @@ struct StreamDockApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("StreamDock 设置", id: SettingsView.windowID) {
+        Settings {
             SettingsView(controller: appDelegate.controller)
         }
         .windowResizability(.contentSize)
-        .defaultLaunchBehavior(.suppressed)
     }
 }
 
@@ -29,6 +29,8 @@ struct StreamDockApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let controller = DockController(scenes: [makeGeneralScene(), makeVibeCodingScene(), makeSynthScene()])
     private var activity: NSObjectProtocol?
+    private var displayPower: DisplayPowerMonitor?
+    private var obsLights: OBSLightMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Two copies would fight over the device.
@@ -46,10 +48,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         ProcessInfo.processInfo.disableAutomaticTermination("Driving the StreamDock")
         ProcessInfo.processInfo.disableSuddenTermination()
+        displayPower = DisplayPowerMonitor { [weak self] asleep in self?.controller.setDisplaysSleeping(asleep) }
+        controller.requestDisplayWake = { [weak self] in self?.displayPower?.requestWake() }
+        displayPower?.start()
         controller.start()
+        obsLights = OBSLightMonitor(center: controller.activities)
+        obsLights?.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        displayPower?.stop()
+        HAClient.shared.disconnect()
+        obsLights?.stop()
         controller.shutdown()
     }
 }

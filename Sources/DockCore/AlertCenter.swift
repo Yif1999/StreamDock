@@ -15,9 +15,9 @@ public final class AlertCenter {
         flashTask = Task { [weak self] in
             for _ in 0..<times {
                 self?.set(color)
-                try? await Task.sleep(for: interval)
+                do { try await Task.sleep(for: interval) } catch { return }
                 self?.set(.black)
-                try? await Task.sleep(for: interval)
+                do { try await Task.sleep(for: interval) } catch { return }
                 if Task.isCancelled { return }
             }
             self?.finish()

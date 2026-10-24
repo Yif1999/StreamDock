@@ -26,6 +26,7 @@ final class MusicGlow: LightAnimation {
     var rhythm: () -> (events: [RhythmEvent], snapshot: RhythmSnapshot)? = { nil }
     /// False while Music is paused: the glow eases into a slow breath and back.
     var playing = true
+    var isActive: Bool { playing }
 
     private struct Blob {
         var position: Double
@@ -67,7 +68,6 @@ final class MusicGlow: LightAnimation {
     /// Per ring-slot sparks, each the same kind of envelope as the flashes.
     private var sparks: [FlashEnvelope] = []
     private var lastSpark: TimeInterval = -.infinity
-    private var output = LEDOutput()
 
     init(palette: [RGB]) {
         self.palette = palette.map(OKLab.init(srgb:))
@@ -81,11 +81,11 @@ final class MusicGlow: LightAnimation {
         paletteChanged = lastTime
     }
 
-    func colors(at time: TimeInterval, ledCount: Int) -> [RGB] {
+    func pixels(at time: TimeInterval, ledCount: Int) -> [LightPixel] {
         frame(at: time, ledCount: ledCount, input: rhythm())
     }
 
-    func frame(at time: TimeInterval, ledCount: Int, input: (events: [RhythmEvent], snapshot: RhythmSnapshot)?) -> [RGB] {
+    func frame(at time: TimeInterval, ledCount: Int, input: (events: [RhythmEvent], snapshot: RhythmSnapshot)?) -> [LightPixel] {
         let dt = min(0.1, max(0, time - (lastTime ?? time)))
         lastTime = time
         if paletteChanged == nil, previous != nil { paletteChanged = time }
@@ -144,7 +144,7 @@ final class MusicGlow: LightAnimation {
         let pause = GlowBudget.pauseBrightness(at: time)
         let width = GlowBudget.blobWidth * (1 + 0.4 * loudness + 0.4 * anyAccent)
 
-        var pixels = Array(repeating: (channels: (0.0, 0.0, 0.0), level: 0.0), count: ledCount)
+        var pixels = Array(repeating: LightPixel.black, count: ledCount)
         for (slot, led) in ring.enumerated() {
             let position = Double(slot) / Double(ring.count)
             let weights = blobs.map { blob -> Double in
@@ -168,7 +168,7 @@ final class MusicGlow: LightAnimation {
                 color = color.mixed(with: .white, amount: GlowBudget.sparkWhite * spark)
                 level = GlowBudget.screen(level, GlowBudget.sparkSize * spark)
             }
-            pixels[led] = (color.ledChannels, level)
+            pixels[led] = LightPixel(channels: color.ledChannels, level: level)
         }
 
         // Short bars: the main album color; accents light them by how far they spread.
@@ -177,9 +177,9 @@ final class MusicGlow: LightAnimation {
         let barLevel = pause * 0.8 + (barPlaying - pause * 0.8) * presence
         let barColor = blobColors[0].mixed(with: .white, amount: GlowBudget.bloom * barAccent * barAccent)
         for bar in [LightLayout.leftBar, LightLayout.rightBar] where bar < ledCount {
-            pixels[bar] = (barColor.ledChannels, barLevel)
+            pixels[bar] = LightPixel(channels: barColor.ledChannels, level: barLevel)
         }
-        return output.render(pixels)
+        return pixels
     }
 
     /// A flash starting at the next blob in turn, so the light comes from the colors themselves.
@@ -240,6 +240,7 @@ public enum GlowReplay {
     public static func replay(trace: RhythmTrace, palette: [RGB], ledCount: Int = 24) -> [String] {
         let analyzer = RhythmAnalyzer(frameRate: trace.frameRate)
         let glow = MusicGlow(palette: palette)
+        var output = LEDOutput()
         var lines: [String] = []
         var pending: [RhythmEvent] = []
         var nextRender = trace.frames.first?.time ?? 0
@@ -252,7 +253,7 @@ public enum GlowReplay {
                 if case .accent = event { return true }
                 return false
             }
-            let colors = glow.frame(at: frame.time, ledCount: ledCount, input: (pending, analyzer.snapshot))
+            let colors = output.render(glow.frame(at: frame.time, ledCount: ledCount, input: (pending, analyzer.snapshot)))
             pending.removeAll()
             lines.append(String(format: "%.3f %@ %d ", frame.time, analyzer.snapshot.state.rawValue, beat ? 1 : 0) + colors.map(\.hex).joined(separator: " "))
         }

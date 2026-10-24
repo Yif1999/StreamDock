@@ -24,11 +24,10 @@ public enum M18Layout {
     public static let keyImageSize = 64
     public static let ledCount: UInt16 = 24
 
-    /// The light ring around the base, in physical order: LED 0 at the front-left, along the
-    /// front edge to the right (0–5), up the right side (5–11), across the back (12–16) and down
-    /// the left side (16–21), closing back at 0. Roughly evenly spaced.
-    /// Mapped by lighting one LED at a time on video (2026-10-24). The light guide spreads
-    /// each LED's light to its neighbours and into the short bars, so single LEDs look smeared.
+    /// User-confirmed physical order (2026-10-24): 0–10 lower half, 11–21 upper half,
+    /// counterclockwise when viewed from above. Left end is 21/0, right end 10/11;
+    /// lower and upper midpoints are 5 and 16. This supersedes the earlier corner mapping.
+    /// The light guide spreads each LED's light into its neighbours and the short bars.
     public static let ringLEDs = Array(0...21)
     /// The short bars beside the round keys; not part of the ring.
     public static let leftBarLED = 22

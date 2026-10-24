@@ -24,6 +24,13 @@
 	<string>StreamDock 用 M18 上的按键控制「音乐」App 的播放、暂停和切歌。</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>StreamDock 实时分析「音乐」App 正在播放的声音，让灯带随节奏律动。声音不会被保存或发送。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>StreamDock 连接局域网中的 Home Assistant，显示智能家居状态并执行你的按键操作。</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsLocalNetworking</key>
+		<true/>
+	</dict>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSSupportsAutomaticTermination</key>
