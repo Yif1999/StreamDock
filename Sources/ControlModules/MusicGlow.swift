@@ -248,9 +248,9 @@ public enum GlowReplay {
         var nextRender = trace.frames.first?.time ?? 0
         for frame in trace.frames {
             pending += analyzer.process(frame)
-            // Render at 30 fps like the app, handing over the events gathered since last time.
+            // Render at the strip rate like the app, handing over the events gathered since last time.
             guard frame.time >= nextRender else { continue }
-            nextRender += 1.0 / 30
+            nextRender += 1 / LightLayout.framesPerSecond
             let beat = pending.contains { event in
                 if case .accent = event { return true }
                 return false

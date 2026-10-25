@@ -28,10 +28,9 @@ public final class KeyHold {
         progress = 0
         redraw()
         task = Task { [weak self] in
-            for frame in 1... {
-                // Frames are due on a fixed grid from the start, so a late frame does not push the rest back.
-                let due = start + .seconds(Double(frame) / Self.framesPerSecond)
-                do { try await Task.sleep(until: due, clock: .continuous) } catch { return }
+            let grid = FrameGrid(framesPerSecond: Self.framesPerSecond, start: start)
+            while true {
+                do { try await grid.sleep() } catch { return }
                 guard let self, !Task.isCancelled else { return }
                 let elapsed = Self.seconds(ContinuousClock.now - start)
                 guard elapsed < total else {

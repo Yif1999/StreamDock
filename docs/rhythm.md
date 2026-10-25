@@ -43,7 +43,7 @@ BTrack 一类）跟踪拍点 → 显式状态机决定是否输出节拍。渲�
        .accent(time, strength)   .expectedBeat(time: T)   .hit(time, band: low/mid/high, strength)
        快照：state、tempo、intensity、各频段响度
   │
-  ▼ ③ MusicGlow（渲染，30 fps）——亮度、颜色、速度的分配统一在 GlowBudget
+  ▼ ③ MusicGlow（渲染，60 fps，与灯带刷新率一致）——亮度、颜色、速度的分配统一在 GlowBudget
        单位：所有亮度都是"感知亮度" 0…1，只在最后由灯光引擎层 DockCore.LEDOutput 换算成 LED 驱动值（伽马 2.2）；
               暗部 8 位只有 1、2、3… 几档，每个通道要偏离当前显示值 0.7 档以上才改变，
               数值在两档之间徘徊时不会来回跳（暗部不闪）

@@ -17,6 +17,10 @@ public extension LightAnimation { var isActive: Bool { true } }
 
 /// Where the LEDs physically are, for animations that move along the ring.
 public enum LightLayout {
+    /// The strip's refresh rate, measured on the M18 (2026-10-25, `dock-probe ledfps`): 60
+    /// white/off flips a second show cleanly, 90 and 120 do not. Frames go out on a fixed grid
+    /// at this rate, like the key screen's 60 Hz.
+    public static let framesPerSecond = 60.0
     /// The ring around the base, in physical order; it closes from the last back to the first.
     public static let ring = M18Layout.ringLEDs
     /// The two short bars beside the round keys (not part of the ring).
@@ -24,7 +28,7 @@ public enum LightLayout {
     public static let rightBar = M18Layout.rightBarLED
 }
 
-/// Drives the light strip: a steady color, or an animation at ~30 fps, with cross-fades
+/// Drives the light strip: a steady color, or an animation at `LightLayout.framesPerSecond`, with cross-fades
 /// between whatever was showing and whatever comes next. Idle while showing a steady color.
 ///
 /// Every change is eased — nothing on the strip ever switches instantly. Callers pick the
@@ -110,7 +114,7 @@ final class LightEngine {
             progress = min(1, (clock() - start) / duration)
             let eased = Self.ease(progress)
             sendFrame?(output.render(from.map { $0.mixed(with: .black, amount: eased) }, gain: shownGain))
-            Thread.sleep(forTimeInterval: 1.0 / 30)
+            Thread.sleep(forTimeInterval: 1 / LightLayout.framesPerSecond)
         }
         // Per-LED frames show one frame late on the M18; settle on black with a solid command.
         sendSolid?(.black)
@@ -143,8 +147,9 @@ final class LightEngine {
     private func startTicking() {
         guard !suspended, automaticTicks, ticker == nil else { return }
         ticker = Task { [weak self] in
-            while !Task.isCancelled {
-                do { try await Task.sleep(for: .milliseconds(33)) } catch { return }
+            let grid = FrameGrid(framesPerSecond: LightLayout.framesPerSecond)
+            while true {
+                do { try await grid.sleep() } catch { return }
                 guard let self else { return }
                 self.render()
                 if !self.needsTicking {

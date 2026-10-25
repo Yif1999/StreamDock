@@ -39,6 +39,7 @@ public final class M18Device: @unchecked Sendable {
 
     private let stateLock = NSLock()
     private var isOpen = true
+    private var skippedLEDFrames = 0
     private let readerFinished = DispatchSemaphore(value: 0)
     private var heartbeat: DispatchSourceTimer?
 
@@ -176,9 +177,19 @@ public final class M18Device: @unchecked Sendable {
         guard !colors.isEmpty else { return }
         perform("set_single_led_color") { handle in
             var canWrite: Int32 = 1
-            if transport_can_write(handle, &canWrite) == TRANSPORT_SUCCESS, canWrite == 0 { return TRANSPORT_SUCCESS }
+            if transport_can_write(handle, &canWrite) == TRANSPORT_SUCCESS, canWrite == 0 {
+                self.stateLock.lock(); self.skippedLEDFrames += 1; self.stateLock.unlock()
+                return TRANSPORT_SUCCESS
+            }
             return colors.withUnsafeBufferPointer { transport_set_single_led_color(handle, UInt16(colors.count), $0.baseAddress!) }
         }
+    }
+
+    /// Animation frames dropped so far because the transport was busy. For diagnostics.
+    public var droppedLEDFrames: Int {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return skippedLEDFrames
     }
 
     /// What the transport reports for `can_write` (nil if the call itself failed). For diagnostics.

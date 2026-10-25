@@ -8,6 +8,9 @@
 //   dock-probe ddc             read brightness / volume from the external monitor over DDC
 //   dock-probe cpa <base-url>  read-only: CPA accounts and the Claude / Codex quota replies (key in CPA_KEY)
 //   dock-probe fpstest [rate…] [--all]  frame numbers at each rate, for a slow-motion video
+//   dock-probe ledfps [rate…]  light strip white/off flips at each rate, for a slow-motion video
+//   dock-probe agentlight [codex|claude|both]  light-strip reminders, as a narrated story
+//   dock-probe ledbench [seconds]  light-strip frames at 60 Hz: dropped frames and send lateness
 
 import AppKit
 import ImageIO
@@ -185,6 +188,194 @@ case "fpstest":
             _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/say"), arguments: ["\(second)"])
         }
     }
+    device.close(notifyDevice: true)
+case "ledfps":
+    // dock-probe ledfps [rate…]: the whole strip flips between full white and off on every
+    // frame at each rate (default 30 60 90 120), 4 s each, after a 2 s colored card (red 30,
+    // green 60, blue 90, white 120, else yellow). Film it in slow motion: a strip that keeps up
+    // shows one flip per frame sent; dropped or merged flips mean it shows fewer frames.
+    guard let identity = M18Device.attached().first else {
+        print("no M18 attached")
+        break
+    }
+    let rates = arguments.dropFirst().compactMap(Double.init).filter { $0 > 0 }
+    let cards: [Double: (UInt8, UInt8, UInt8)] = [30: (255, 0, 0), 60: (0, 255, 0), 90: (0, 0, 255), 120: (255, 255, 255)]
+    let count = Int(M18Layout.ledCount)
+    let device = try M18Device(opening: identity) { _ in }
+    device.setLEDBrightness(100)
+    for rate in rates.isEmpty ? [30, 60, 90, 120] : rates {
+        let card = cards[rate] ?? (255, 200, 0)
+        print("\(Int(rate)) frames/s: card for 2 s, then 4 s of white/off flips")
+        // Per-LED frames show when the next one arrives: keep sending the card while it shows.
+        let cardEnd = Date().addingTimeInterval(2)
+        while Date() < cardEnd {
+            device.setLEDFrame(Array(repeating: card, count: count))
+            Thread.sleep(forTimeInterval: 1.0 / 30)
+        }
+        let start = Date()
+        for frame in 0..<Int(rate * 4) {
+            let due = start.addingTimeInterval(Double(frame) / rate)
+            if due > Date() { Thread.sleep(until: due) }
+            let level: UInt8 = frame % 2 == 0 ? 255 : 0
+            device.setLEDFrame(Array(repeating: (level, level, level), count: count))
+        }
+        device.waitUntilIdle()
+    }
+    device.setLEDFrame(Array(repeating: (0, 0, 0), count: count))
+    device.setLEDFrame(Array(repeating: (0, 0, 0), count: count))
+    device.waitUntilIdle()
+    device.close(notifyDevice: true)
+case "agentlight":
+    // dock-probe agentlight [codex|claude|both] [step…] [--sheet <out.png>]: one app's (or both apps') light-strip reminders
+    // as a story, each step announced aloud before its light, states running into each other as
+    // they would in use. Quit the app first; it holds the device. --sheet draws it offline instead
+    // (narration taken as 1.5 s; columns of 20 s, time downwards, ring LEDs 0–21 then the bars).
+    let service: AIService = arguments.contains("codex") ? .codex : .claude
+    let color = AgentLight.color(for: service), name = service.name
+    let leds = Int(M18Layout.ledCount)
+    // Idle shows the scene color at the inactive half brightness, as the app does.
+    let idle = AgentLight.crossfade(Array(repeating: .black, count: leds), Array(repeating: LightPixel(RGB(hex: "#85FC5E")), count: leds), amount: 0.5)
+    typealias Light = (_ time: Double, _ since: Double) -> [LightPixel]
+    func motion(_ m: AgentLight.Motion) -> Light { { AgentLight.pixels(AgentLight.levels(m, at: $0, since: $1), color: color, ledCount: leds) } }
+    let rest: Light = { _, _ in idle }
+    func then(_ first: @escaping Light, after: Double, _ second: @escaping Light, fade: Double) -> Light {
+        { t, since in
+            let into = t - since - after
+            guard into >= 0 else { return first(t, since) }
+            return AgentLight.crossfade(first(t, since), second(t, since + after), amount: into / fade)
+        }
+    }
+    // What happens, how long its light runs, how it fades in from the light before, the light.
+    let cx = AgentLight.color(for: .codex), cl = AgentLight.color(for: .claude)
+    func on(_ m: AgentLight.Motion, _ c: RGB) -> Light { { AgentLight.pixels(AgentLight.levels(m, at: $0, since: $1), color: c, ledCount: leds) } }
+    func bars(_ light: @escaping Light, _ c: RGB) -> Light { { AgentLight.withBars(light($0, $1), color: c) } }
+    let bothWorking: Light = { t, _ in AgentLight.twoComets(cx, cl, at: t, ledCount: leds) }
+    let both: [(say: String, seconds: Double, fade: Double, light: Light)] = [
+        ("Codex 和 Claude 都开始工作", 8, 0.6, bothWorking),
+        ("Claude 需要你批准，Codex 还在工作", 8, 0.3, bars(on(.summon, cl), cx)),
+        ("Codex 也需要你批准", 9, 0.3, { AgentLight.alternatingSummon([cx, cl], at: $0, since: $1, ledCount: leds) }),
+        ("你批准了 Claude，它继续工作，Codex 还在等你", 7, 0.3, bars(on(.summon, cx), cl)),
+        ("你也批准了 Codex，两个都在工作", 6, 0.6, bothWorking),
+        ("Codex 完成了，Claude 还在工作", 8, 0.15, bars(on(.close, cx), cl)),
+        ("Claude 出错了", 14, 0.15, then(bars(on(.fail, cl), cx), after: AgentLight.failDuration,
+                                          { t, _ in AgentLight.alternatingHolds([(.hold, cx), (.fault, cl)], at: t, ledCount: leds) }, fade: 1)),
+        ("你查看了 Codex，只剩 Claude 的错误", 6, 1, on(.fault, cl)),
+        ("你查看了 Claude，提醒消失", 4, 1.2, rest),
+    ]
+    let single: [(say: String, seconds: Double, fade: Double, light: Light)] = [
+        ("你给 \(name) 发了一条消息，它开始工作", 7, 0.6, motion(.cruise)),
+        ("它需要你批准一个操作，你不在它的窗口", 7, 0.3, motion(.summon)),
+        ("你切到 \(name) 的窗口，正在看批准提示", 7, 0.6, motion(.quietSummon)),
+        ("你批准了，它继续工作", 5, 0.6, motion(.cruise)),
+        ("它完成了，你不在它的窗口", 9, 0.15, motion(.close)),
+        ("你切回 \(name)，提醒消失", 4, 1.2, rest),
+        ("新任务开始", 5, 0.6, motion(.cruise)),
+        ("工作中途出错了，你不在它的窗口", 10, 0.15, motion(.fail)),
+        ("你切回 \(name)，提醒消失", 4, 1.2, rest),
+        ("再来一个任务，这次你一直看着它的窗口", 5, 0.6, motion(.cruise)),
+        ("它完成了，你正看着", 5, 0.15, then(motion(.close), after: 1.6, rest, fade: 1.2)),
+        ("最后一个任务", 5, 0.6, motion(.cruise)),
+        ("你按 Esc 打断了它", 4, 1.2, rest),
+    ]
+    let story = arguments.contains("both") ? both : single
+    // The light at `t`: the step's own light, faded in from where the previous one stood.
+    func frame(_ t: Double, step: Int, since: Double, previous: Light, previousSince: Double) -> [LightPixel] {
+        let item = story[step]
+        let now = item.light(t, since)
+        guard t - since < item.fade else { return now }
+        return AgentLight.crossfade(previous(t, previousSince), now, amount: (t - since) / item.fade)
+    }
+
+    if let index = arguments.firstIndex(of: "--sheet"), arguments.indices.contains(index + 1) {
+        let rowsPerSecond = 15.0, columnSeconds = 20.0, cell = 6, gap = 14
+        var rows: [[RGB]] = []
+        var output = LEDOutput()
+        var t = 0.0, previous: Light = rest, previousSince = 0.0
+        for step in story.indices {
+            let speechEnd = t + 1.5
+            while t < speechEnd { rows.append(output.render(previous(t, previousSince))); t += 1 / rowsPerSecond }
+            let since = t
+            while t < since + story[step].seconds {
+                rows.append(output.render(frame(t, step: step, since: since, previous: previous, previousSince: previousSince)))
+                t += 1 / rowsPerSecond
+            }
+            previous = story[step].light; previousSince = since
+        }
+        let perColumn = Int(columnSeconds * rowsPerSecond)
+        let columns = (rows.count + perColumn - 1) / perColumn
+        let columnWidth = 24 * cell + 6
+        let width = columns * (columnWidth + gap), height = perColumn * 2
+        let sheet = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                              space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        sheet.setFillColor(CGColor(gray: 0.1, alpha: 1)); sheet.fill(CGRect(x: 0, y: 0, width: width, height: height))
+        for (r, rgb) in rows.enumerated() {
+            let column = r / perColumn, row = r % perColumn
+            for (slot, led) in (Array(0...21) + [22, 23]).enumerated() {
+                let c = rgb[led]
+                sheet.setFillColor(CGColor(srgbRed: Double(c.red) / 255, green: Double(c.green) / 255, blue: Double(c.blue) / 255, alpha: 1))
+                sheet.fill(CGRect(x: column * (columnWidth + gap) + slot * cell + (slot >= 22 ? 6 : 0), y: height - (row + 1) * 2, width: cell - 1, height: 2))
+            }
+        }
+        let png = NSBitmapImageRep(cgImage: sheet.makeImage()!).representation(using: .png, properties: [:])!
+        try png.write(to: URL(fileURLWithPath: arguments[index + 1]))
+        print("wrote \(arguments[index + 1])")
+        break
+    }
+
+    guard let identity = M18Device.attached().first else {
+        print("no M18 attached")
+        break
+    }
+    let gain = Double(DockSettings(defaults: UserDefaults(suiteName: "dev.yif.StreamDock") ?? .standard).ledBrightness) / 100
+    let device = try M18Device(opening: identity) { _ in }
+    device.setLEDBrightness(100)
+    var output = LEDOutput()
+    let clock = Date()
+    let grid = FrameGrid(framesPerSecond: LightLayout.framesPerSecond)
+    func send(_ frame: [LightPixel]) {
+        device.setLEDFrame(output.render(frame, gain: gain).map { ($0.red, $0.green, $0.blue) })
+        Thread.sleep(forTimeInterval: ProbeClock.seconds(until: grid.next()))
+    }
+    // Step numbers on the command line play just those steps, in order.
+    let picked = arguments.compactMap(Int.init).filter { story.indices.contains($0 - 1) }.map { $0 - 1 }
+    var previous: Light = rest, previousSince = 0.0
+    for step in picked.isEmpty ? Array(story.indices) : picked {
+        print("\(step + 1). \(story[step].say)")
+        // The previous light keeps going while the next step is read out.
+        let speech = try? Process.run(URL(fileURLWithPath: "/usr/bin/say"), arguments: [story[step].say])
+        while speech?.isRunning == true { send(previous(Date().timeIntervalSince(clock), previousSince)) }
+        let since = Date().timeIntervalSince(clock)
+        while Date().timeIntervalSince(clock) < since + story[step].seconds {
+            send(frame(Date().timeIntervalSince(clock), step: step, since: since, previous: previous, previousSince: previousSince))
+        }
+        previous = story[step].light; previousSince = since
+    }
+    for _ in 0..<2 { send(idle) }
+    device.waitUntilIdle()
+    print("LED frames dropped (transport busy): \(device.droppedLEDFrames)")
+    device.close(notifyDevice: true)
+case "ledbench":
+    // dock-probe ledbench [seconds]: light-strip frames at 60 Hz on the frame grid, timed: how
+    // many the transport dropped, and how late each send went out.
+    guard let identity = M18Device.attached().first else { print("no M18 attached"); break }
+    let seconds = arguments.dropFirst().first.flatMap(Double.init) ?? 5
+    let device = try M18Device(opening: identity) { _ in }
+    let grid = FrameGrid(framesPerSecond: LightLayout.framesPerSecond)
+    var late: [Double] = []
+    let start = Date()
+    var frame = 0
+    while Date().timeIntervalSince(start) < seconds {
+        let due = grid.next()
+        Thread.sleep(forTimeInterval: ProbeClock.seconds(until: due))
+        late.append(millisecondsPast(due))
+        let level: UInt8 = frame % 60 < 30 ? 80 : 20
+        device.setLEDFrame(Array(repeating: (level, 0, 0), count: Int(M18Layout.ledCount)))
+        frame += 1
+    }
+    device.waitUntilIdle()
+    late.sort()
+    print(String(format: "%d frames in %.1f s, dropped %d; send lateness median %.1f ms, p99 %.1f ms, max %.1f ms",
+                 frame, seconds, device.droppedLEDFrames, late[late.count / 2], late[late.count * 99 / 100], late.last ?? 0))
     device.close(notifyDevice: true)
 case "keytest":
     // Pixel test patterns on the top row, to see whether the firmware shows 64×64 key images
@@ -535,4 +726,18 @@ struct SheetKey {
     let destination = CGImageDestinationCreateWithURL(URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil)!
     CGImageDestinationAddImage(destination, context.makeImage()!, nil)
     guard CGImageDestinationFinalize(destination) else { throw CocoaError(.fileWriteUnknown) }
+}
+
+/// Seconds from now until a grid slot, for the probe's synchronous loops.
+enum ProbeClock {
+    static func seconds(until instant: ContinuousClock.Instant) -> Double {
+        let gap = (instant - ContinuousClock.now).components
+        return max(0, Double(gap.seconds) + Double(gap.attoseconds) / 1e18)
+    }
+}
+
+/// How far past `instant` now is, in ms (0 if not yet).
+func millisecondsPast(_ instant: ContinuousClock.Instant) -> Double {
+    let gap = (ContinuousClock.now - instant).components
+    return max(0, Double(gap.seconds) + Double(gap.attoseconds) / 1e18) * 1000
 }

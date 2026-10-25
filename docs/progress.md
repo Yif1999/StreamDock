@@ -91,7 +91,8 @@
 
 ## VibeCoding 场景（开发中，2026-10-25）
 
-- 场景色 `#FC8FFF`（用户在灯带上调定）。三排都已完成；任务状态提醒只做在灯带上（待做）。
+- 场景色 `#85FC5E`（用户在灯带上调定，避开两个品牌色）。三排都已完成。任务状态提醒只做在灯带上：灯效（单个应用和两个应用同时）已在灯带上逐条演示定稿（见 design.md「编程助手提醒」）；状态逻辑和 Claude / Codex 的 hook 接入待做。
+- 待做（用户已确认做法）：灯带颜色按线性光换算——现在颜色代码的数值被直接当成灯珠亮度比例，没有先按 sRGB 解码，小通道在灯带上被放大（含白色成分的颜色偏粉紫、橙色偏黄，封面取色也不够准）。改为先解码再取比例，并把已对着灯带调好的颜色（三个场景底色、OBS 颜色、两个品牌灯带色、设置里的自定义场景色）换算成新代码，保证灯带上看起来不变。
 - **额度来源 CPA**（CLIProxyAPI，自建服务器，远程管理已开启）：两个账号的登录凭据挂在 CPA 上，本机客户端不开也能更新。流程：`GET /v0/management/auth-files` 取账号 → 每个服务一次 `POST /v0/management/api-call`，由 CPA 用该账号的令牌（`$TOKEN$`）发固定的 GET：
   - Claude：`https://api.anthropic.com/api/oauth/usage`（`five_hour` / `seven_day` 的 `utilization`、`resets_at`）；
   - Codex：`https://chatgpt.com/backend-api/wham/usage`（`rate_limit` 的两个窗口按 `limit_window_seconds` 区分 5h / 周、`credits.balance`、`rate_limit_reset_credits.available_count`）。
