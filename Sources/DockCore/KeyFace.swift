@@ -35,6 +35,14 @@ public struct RGB: Hashable, Codable, Sendable {
     public static let white = RGB(255, 255, 255)
 }
 
+/// A gauge that fills the key from the left: what is left of a quota, in the service's own color.
+public struct KeyMeter: Hashable, Sendable {
+    /// 0 (empty, all black) ... 1 (full).
+    public var fraction: Double
+    public var color: RGB
+    public init(fraction: Double, color: RGB) { self.fraction = fraction; self.color = color }
+}
+
 /// What one LCD key shows. Modules say what the key is and what state it is in; how that
 /// looks (colors, sizes, grid) is decided once, by `KeyDesign`.
 public struct KeyFace: Hashable, Sendable {
@@ -48,19 +56,23 @@ public struct KeyFace: Hashable, Sendable {
     public var caption: String?
     /// What the key's state means; the only say a module has over color.
     public var tone: KeyTone
+    /// A quota gauge behind the value (the one place a service's own color appears).
+    public var meter: KeyMeter?
 
     public init(
         symbol: String? = nil,
         artwork: Data? = nil,
         title: String? = nil,
         caption: String? = nil,
-        tone: KeyTone = .normal
+        tone: KeyTone = .normal,
+        meter: KeyMeter? = nil
     ) {
         self.symbol = symbol
         self.artwork = artwork
         self.title = title
         self.caption = caption
         self.tone = tone
+        self.meter = meter
     }
 
     public static let blank = KeyFace()

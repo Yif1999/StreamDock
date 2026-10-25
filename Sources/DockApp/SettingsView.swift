@@ -21,6 +21,7 @@ struct SettingsView: View {
                 Section("翻页") {
                     Text("设备下方三个圆键切换场景；重复按当前场景的圆键循环翻页。")
                     LabeledContent("通用控制", value: "日常控制 → 智能家居 → OBS")
+                    LabeledContent("VibeCoding", value: "Codex 与 Claude 额度")
                 }
             }.tabItem { Label("场景", systemImage: "square.grid.2x2") }.tag("scenes")
             Form {
@@ -35,6 +36,8 @@ struct SettingsView: View {
                 .tabItem { Label("智能家居", systemImage: "house") }.tag("home")
             Form { OBSSettingsSection() }
                 .tabItem { Label("OBS", systemImage: "video") }.tag("obs")
+            Form { CPASettingsSection() }
+                .tabItem { Label("VibeCoding", systemImage: "chevron.left.forwardslash.chevron.right") }.tag("vibecoding")
         }
         .formStyle(.grouped)
         .frame(width: 640, height: 580)

@@ -45,6 +45,8 @@ public enum KeyDesign {
     static let edge = (low: 0.12, high: 0.82)
 
     struct Palette { let tile: RGB?; let glyph: RGB; let label: RGB }
+    /// Ink over a meter's fill: black glyph, the fill's own color darkened for the label.
+    static let meterLabelShade = 0.35
 
     static func palette(_ tone: KeyTone) -> Palette {
         switch tone {
@@ -59,8 +61,9 @@ public enum KeyDesign {
 
     /// Renders a face: artwork edge to edge, or glyph / value with an optional label.
     public static func image(symbol: String? = nil, value: String? = nil, label: String? = nil,
-                             tone: KeyTone = .normal, artwork: Data? = nil, pressed: Bool = false) -> CGImage? {
-        let colors = palette(tone)
+                             tone: KeyTone = .normal, artwork: Data? = nil, meter: KeyMeter? = nil,
+                             pressed: Bool = false) -> CGImage? {
+        let colors = palette(meter == nil ? tone : .normal)
         var canvas = Canvas(side: side)
         canvas.fill(.black)
         if let artwork, let picture = NSImage(data: artwork) {
@@ -70,13 +73,26 @@ public enum KeyDesign {
         }
         // A state fills the whole key (the panel's black window frames it).
         if let tile = colors.tile { canvas.fill(tile) }
+        // A meter fills whole columns from the left; ink takes the color of whatever is under it,
+        // so a value split by the edge reads in two colors (black on the fill, white on black).
+        var split = 0
+        if let meter {
+            split = Int((min(1, max(0, meter.fraction)) * Double(side)).rounded())
+            canvas.fill(meter.color, columns: 0..<split)
+        }
+        func paint(_ coverage: [Double], _ color: RGB, onFill: RGB) {
+            guard split > 0 else { return canvas.composite(coverage, color: color, sharpen: true) }
+            canvas.composite(coverage, color: onFill, sharpen: true, columns: 0..<split)
+            canvas.composite(coverage, color: color, sharpen: true, columns: split..<side)
+        }
+        let meterLabel = meter?.color.scaled(by: meterLabelShade) ?? colors.label
         // Label first: its ink top bounds the area left for the glyph.
         var contentBottom = side - margin
         if let label {
             let text = textMask(label, size: labelSize, weight: .medium, rounded: false, baseline: labelBaseline,
                                 maxWidth: labelWidth, tracking: labelTracking)
             if let ink = inkBounds(text) {
-                canvas.composite(shifted(text, dx: side / 2 - (ink.minX + ink.maxX + 1) / 2, dy: 0), color: colors.label, sharpen: true)
+                paint(shifted(text, dx: side / 2 - (ink.minX + ink.maxX + 1) / 2, dy: 0), colors.label, onFill: meterLabel)
                 contentBottom = ink.minY - labelGap
             }
         }
@@ -100,7 +116,7 @@ public enum KeyDesign {
                 top = margin + (contentBottom - margin - height) / 2
             }
             let dy = top - ink.minY
-            canvas.composite(shifted(main, dx: dx, dy: dy), color: colors.glyph, sharpen: true)
+            paint(shifted(main, dx: dx, dy: dy), colors.glyph, onFill: .black)
         }
         if pressed { canvas.darken(pressedDim) }
         return canvas.image()
@@ -202,12 +218,14 @@ public enum KeyDesign {
 
         init(side: Int) { self.side = side; pixels = Array(repeating: 0, count: side * side * 3) }
 
-        mutating func fill(_ color: RGB) {
-            for i in 0..<(side * side) { set(i, color, 1) }
+        mutating func fill(_ color: RGB, columns: Range<Int>? = nil) {
+            let columns = columns ?? 0..<side
+            for i in 0..<(side * side) where columns.contains(i % side) { set(i, color, 1) }
         }
 
-        mutating func composite(_ coverage: [Double], color: RGB, sharpen: Bool) {
-            for i in coverage.indices {
+        mutating func composite(_ coverage: [Double], color: RGB, sharpen: Bool, columns: Range<Int>? = nil) {
+            let columns = columns ?? 0..<side
+            for i in coverage.indices where columns.contains(i % side) {
                 var a = coverage[i]
                 if sharpen { a = min(1, max(0, (a - edge.low) / (edge.high - edge.low))) }
                 if a > 0 { set(i, color, a) }

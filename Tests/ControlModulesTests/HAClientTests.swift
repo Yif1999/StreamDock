@@ -2,13 +2,6 @@ import Foundation
 import Testing
 @testable import ControlModules
 
-private final class MemoryHATokens: HATokenStore {
-    var values: [String: String] = [:]
-    func read(account: String) throws -> String? { values[account] }
-    func save(_ token: String, account: String) throws { values[account] = token }
-    func delete(account: String) throws { values.removeValue(forKey: account) }
-}
-
 @MainActor struct HAClientTests {
     @Test func endpointsNormalizeAndRejectEmbeddedCredentials() throws {
         #expect(try HAEndpoint("192.168.1.20:8123/").websocket.absoluteString == "ws://192.168.1.20:8123/api/websocket")
@@ -20,7 +13,7 @@ private final class MemoryHATokens: HATokenStore {
     @Test func configurationPersistsBindingsButKeepsTokensOutOfDefaults() throws {
         let (defaults, cleanup) = temporaryDefaults()
         defer { cleanup() }
-        let tokens = MemoryHATokens()
+        let tokens = MemorySecrets()
         let client = HAClient(defaults: defaults, tokens: tokens)
         defer { client.disconnect() }
         #expect(client.configure(address: "http://127.0.0.1:1", token: "test-secret"))
@@ -38,7 +31,7 @@ private final class MemoryHATokens: HATokenStore {
     @Test func offlineControlsAreHorizontalAndCentered() throws {
         let (defaults, cleanup) = temporaryDefaults()
         defer { cleanup() }
-        let module = HAModule(client: HAClient(defaults: defaults, tokens: MemoryHATokens()))
+        let module = HAModule(client: HAClient(defaults: defaults, tokens: MemorySecrets()))
         #expect((0..<15).filter { module.face(forSlot: $0) != .blank } == [6, 7, 8])
     }
     @Test func authenticatedSnapshotEventsCommandsReconnectAndInvalidToken() async throws {
@@ -56,7 +49,7 @@ private final class MemoryHATokens: HATokenStore {
         let (defaults, cleanup) = temporaryDefaults()
         defer { cleanup() }
         // Short timeout and hold so the test does not wait out the real ones (6 s, 1 s).
-        let client = HAClient(defaults: defaults, tokens: MemoryHATokens(), requestTimeout: .milliseconds(500))
+        let client = HAClient(defaults: defaults, tokens: MemorySecrets(), requestTimeout: .milliseconds(500))
         defer { client.disconnect() }
         let address = "http://127.0.0.1:\(port)"
         #expect(client.configure(address: address, token: "fixture-token"))

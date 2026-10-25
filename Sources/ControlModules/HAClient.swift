@@ -30,7 +30,7 @@ public final class HAClient {
     public private(set) var lastActionSlot: Int?
     @ObservationIgnored var onChange: (() -> Void)?
     @ObservationIgnored private let defaults: UserDefaults
-    @ObservationIgnored private let tokens: any HATokenStore
+    @ObservationIgnored private let tokens: any SecretStore
     @ObservationIgnored private var task: Task<Void, Never>?
     @ObservationIgnored private var bootstrap: Task<Void, Never>?
     @ObservationIgnored private var heartbeat: Task<Void, Never>?
@@ -47,7 +47,7 @@ public final class HAClient {
     }
     /// How long a request may take before it is reported as timed out (not retried).
     @ObservationIgnored private let requestTimeout: Duration
-    init(defaults: UserDefaults = .standard, tokens: any HATokenStore = HAKeychain(), requestTimeout: Duration = .seconds(6)) {
+    init(defaults: UserDefaults = .standard, tokens: any SecretStore = Keychain.homeAssistant, requestTimeout: Duration = .seconds(6)) {
         self.defaults = defaults; self.tokens = tokens; self.requestTimeout = requestTimeout
         address = defaults.string(forKey: "haAddress") ?? ""
         let saved = defaults.data(forKey: "haBindings").flatMap { try? JSONDecoder().decode([HABinding].self, from: $0) }

@@ -52,7 +52,7 @@ let package = Package(
 
         // Scenes are isolated from each other: each depends only on core (and shared modules).
         .target(name: "SceneGeneral", dependencies: ["DockCore", "ControlModules"]),
-        .target(name: "SceneVibeCoding", dependencies: ["DockCore"]),
+        .target(name: "SceneVibeCoding", dependencies: ["DockCore", "ControlModules"]),
         .target(name: "SceneSynth", dependencies: ["DockCore"]),
 
         .executableTarget(

@@ -6,6 +6,7 @@
 //   dock-probe ledmap          static light-strip patterns, held still for checking by eye
 //   dock-probe rhythm-eval <trace>  replay a rhythm trace and score it against tapped beats
 //   dock-probe ddc             read brightness / volume from the external monitor over DDC
+//   dock-probe cpa <base-url>  read-only: CPA accounts and the Claude / Codex quota replies (key in CPA_KEY)
 
 import AppKit
 import ImageIO
@@ -266,6 +267,20 @@ case "ddc":
             print("\(feature): no answer")
         }
     }
+case "cpa":
+    // Read-only look at what CPA returns, to settle the field names before building on them.
+    // Sends GETs only; never consumes reset credits or touches credentials.
+    guard let base = arguments.dropFirst().first.flatMap(URL.init(string:)),
+          let key = ProcessInfo.processInfo.environment["CPA_KEY"], !key.isEmpty else {
+        print("usage: CPA_KEY=<management key> dock-probe cpa https://cpa.example")
+        break
+    }
+    let done = DispatchSemaphore(value: 0)
+    Task.detached {
+        do { try await probeCPA(base: base, key: key) } catch { print("failed:", error.localizedDescription) }
+        done.signal()
+    }
+    done.wait()
 case "preview":
     try preview(into: arguments.dropFirst().first ?? "build/preview")
 case "run":
@@ -292,6 +307,61 @@ default:
     print("usage: dock-probe run [seconds] | preview <dir> | list | ddc | ledmap | ledset <pattern> | ledwalk [seconds] | glowsim | rhythm-eval")
 }
 
+/// Masks e-mail addresses so the probe output can be shared.
+func maskEmails(_ text: String) -> String {
+    text.replacingOccurrences(of: #"([A-Za-z0-9._%+-])[A-Za-z0-9._%+-]*@([A-Za-z0-9.-]+)"#, with: "$1***@$2", options: .regularExpression)
+}
+
+func probeCPA(base: URL, key: String) async throws {
+    func management(_ path: String, body: Any? = nil) async throws -> Any {
+        var request = URLRequest(url: base.appendingPathComponent("v0/management/" + path))
+        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        if let body {
+            request.httpMethod = "POST"
+            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else { throw NSError(domain: "CPA", code: status, userInfo: [NSLocalizedDescriptionKey: "\(path): HTTP \(status) \(String(decoding: data.prefix(200), as: UTF8.self))"]) }
+        return try JSONSerialization.jsonObject(with: data)
+    }
+    func pretty(_ value: Any) -> String {
+        guard let data = try? JSONSerialization.data(withJSONObject: value, options: [.prettyPrinted, .sortedKeys]) else { return "\(value)" }
+        return maskEmails(String(decoding: data, as: UTF8.self))
+    }
+    let files = (try await management("auth-files") as? [String: Any])?["files"] as? [[String: Any]] ?? []
+    print("== auth-files: \(files.count)")
+    for file in files {
+        let shown = ["name", "provider", "auth_index", "label", "status", "disabled", "unavailable", "account_type", "account", "email"]
+        print(pretty(file.filter { shown.contains($0.key) }), "\n  other fields:", file.keys.filter { !shown.contains($0) }.sorted().joined(separator: ", "))
+    }
+    let calls: [(provider: String, url: String, header: [String: String])] = [
+        ("claude", "https://api.anthropic.com/api/oauth/usage", ["anthropic-beta": "oauth-2025-04-20"]),
+        ("codex", "https://chatgpt.com/backend-api/wham/usage", [:]),
+        ("codex", "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits", [:]),
+    ]
+    for file in files where file["disabled"] as? Bool != true {
+        let provider = (file["provider"] as? String ?? "").lowercased()
+        guard let index = file["auth_index"] else { continue }
+        for call in calls where provider.contains(call.provider) {
+            var header = call.header
+            header["Authorization"] = "Bearer $TOKEN$"
+            if call.provider == "codex", let account = file["account"] as? String, !account.isEmpty, !account.contains("@") {
+                header["chatgpt-account-id"] = account
+            }
+            print(maskEmails("\n== \(file["name"] ?? "?") GET \(call.url)"))
+            do {
+                let reply = try await management("api-call", body: ["auth_index": index, "method": "GET", "url": call.url, "header": header]) as? [String: Any] ?? [:]
+                print("status:", reply["status_code"] ?? "?")
+                if let body = reply["body"] as? String, let data = body.data(using: .utf8), let json = try? JSONSerialization.jsonObject(with: data) {
+                    print(pretty(json))
+                } else { print(maskEmails("\(reply["body"] ?? "")").prefix(1500)) }
+            } catch { print("failed:", error.localizedDescription) }
+        }
+    }
+}
+
 extension RhythmState {
     static let allCasesForReport: [RhythmState] = [.calm, .seeking, .locked]
 }
@@ -300,6 +370,9 @@ extension RhythmState {
 /// One key in the preview sheet.
 struct SheetKey {
     var symbol: String? = nil, value: String? = nil, label: String? = nil, tone: KeyTone = .normal, artwork: Bool = false
+    /// A service's icon as artwork.
+    var app: AIService? = nil
+    var meter: KeyMeter? = nil
 }
 
 @MainActor func writeKeySheet(to path: String, artwork: Data?, pressed: Bool) throws {
@@ -331,14 +404,24 @@ struct SheetKey {
         .init(symbol: "eye.fill", label: "Camera", tone: .on), .init(symbol: "eye.slash", label: "Captions"),
         .init(symbol: "square.and.arrow.down", label: "Save"),
     ]
+    // Readings from the CPA probe of 2026-10-25.
+    func left(_ percent: Double, _ service: AIService) -> KeyMeter { KeyMeter(fraction: percent / 100, color: service.color) }
+    let vibe: [SheetKey] = [
+        .init(app: .codex), .init(value: "97%", label: "5h", meter: left(97, .codex)),
+        .init(value: "81%", label: "Week", meter: left(81, .codex)), .init(value: "2", label: "Resets"), .init(value: "73k", label: "Credits"),
+        .init(app: .claude), .init(value: "83%", label: "5h", meter: left(83, .claude)),
+        .init(value: "93%", label: "Week", meter: left(93, .claude)), .init(value: "3h40", label: "5h Reset"), .init(value: "6d12h", label: "Week Reset"),
+    ]
     func render(_ key: SheetKey) -> CGImage? {
-        KeyDesign.image(symbol: key.symbol, value: key.value, label: key.label, tone: key.tone,
-                        artwork: key.artwork ? artwork : nil, pressed: pressed)
+        let art = key.app.flatMap(AIQuotaModule.icon(for:)) ?? (key.artwork ? artwork : nil)
+        return KeyDesign.image(symbol: key.symbol, value: key.value, label: key.label, tone: key.tone,
+                               artwork: art, meter: key.meter, pressed: pressed)
     }
     let panels: [(String, [CGImage?])] = [
         ("第 1 页 · 日常控制", daily.map(render)),
         ("第 2 页 · 智能家居", home.map(render)),
         ("第 3 页 · OBS", obs.map(render)),
+        ("VibeCoding · 额度", vibe.map(render) + Array(repeating: nil, count: 5)),
     ]
     let zoom = 3, key = 64 * zoom, gap = 10 * zoom, margin = 40, titleHeight = 56
     let panelWidth = 5 * key + 4 * gap, panelHeight = titleHeight + 3 * key + 2 * gap

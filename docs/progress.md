@@ -1,14 +1,14 @@
 # 开发进度
 
-最后整理：2026-10-24。**通用控制场景本批开发已结束**，以下描述最终实现；架构见 [architecture.md](architecture.md)，设计规范见 [design.md](design.md)，音乐分析及 AirPlay 调试记录见 [rhythm.md](rhythm.md)。
+最后整理：2026-10-25。**通用控制场景本批开发已结束；VibeCoding 场景开发中**，以下描述最终实现；架构见 [architecture.md](architecture.md)，设计规范见 [design.md](design.md)，音乐分析及 AirPlay 调试记录见 [rhythm.md](rhythm.md)。
 
 ## 当前交付
 
 - 原生 Swift 菜单栏应用，最低 macOS 26；单进程，不添加登录项、launchd 或常驻助手。
 - 通用控制有三页：日常控制 → 智能家居 → 本机 OBS。重复按通用控制圆键翻页，切到其他场景后再回来保留页码。
 - 新版已构建、签名并在本机运行。HA 已认证并读取 151 个实体；本机 OBS 已认证，用户确认录制按键可用。
-- 自动测试共 65 项：RhythmKitTests 14、ControlModulesTests 36、DockCoreTests 15。网络控制测试使用本地模拟服务，长按与超时时长在测试中缩短。测试用的设置写在系统临时目录并在结束时删除，不在 `~/Library/Preferences` 留文件（2026-10-25 已清理此前残留的 119 个空设置文件）。
-- 用户设备绑定、服务器地址、音频候选设备保存在本机设置；HA 令牌保存在钥匙串。它们不随代码提交，仓库默认 HA 按键为空。
+- 自动测试共 72 项：RhythmKitTests 14、ControlModulesTests 42、DockCoreTests 16。网络控制测试使用本地模拟服务，长按与超时时长在测试中缩短。测试用的设置写在系统临时目录并在结束时删除，不在 `~/Library/Preferences` 留文件（2026-10-25 已清理此前残留的 119 个空设置文件）。
+- 用户设备绑定、服务器地址、音频候选设备保存在本机设置；HA 令牌和 CPA 管理密钥保存在钥匙串（共用 `Keychain`，按服务区分）。它们不随代码提交，仓库默认 HA 按键为空。
 
 ## 按键外观（2026-10-24）
 
@@ -89,10 +89,23 @@
 - 最终 OBS 左右分色和呼吸的实物观感。
 - 2026-10-24 OBS 同时录制和推流时出现过延迟：一是兜底读取把刚由事件更新的"已停止"覆盖回"进行中"约 10 秒（代码问题，已修复）；二是 B 站推流开始后立即断开，进入每 2 秒一次的自动重连循环，期间 OBS 未执行停止命令，最终编码器报错卡死（OBS 及网络问题，控台显示与 OBS 一致）。推流地址被解析到 Clash 虚拟 IP 198.18.5.128，且出现握手签名不匹配，需检查代理分流或推流码；当时 4K60 双路编码丢帧 28%，建议推流降到 1080p。
 
+## VibeCoding 场景（开发中，2026-10-25）
+
+- 场景色 `#FF3C00`（Claude 主题橙的灯带版本）。第 1、2 排完成，第 3 排（任务状态、快捷键）待做。
+- **额度来源 CPA**（CLIProxyAPI，自建服务器，远程管理已开启）：两个账号的登录凭据挂在 CPA 上，本机客户端不开也能更新。流程：`GET /v0/management/auth-files` 取账号 → 每个服务一次 `POST /v0/management/api-call`，由 CPA 用该账号的令牌（`$TOKEN$`）发固定的 GET：
+  - Claude：`https://api.anthropic.com/api/oauth/usage`（`five_hour` / `seven_day` 的 `utilization`、`resets_at`）；
+  - Codex：`https://chatgpt.com/backend-api/wham/usage`（`rate_limit` 的两个窗口按 `limit_window_seconds` 区分 5h / 周、`credits.balance`、`rate_limit_reset_credits.available_count`）。
+  - 这两个上游接口没有公开文档，字段以 2026-10-25 的实测为准（`dock-probe cpa`）。
+- 安全：管理密钥只存钥匙串、只走 HTTPS（本机地址除外）；只发上述查询，不调用消耗重置卡、删除或上传凭据的接口（有测试约束）。
+- 上游没有推送，只在 VibeCoding 场景显示时每 5 分钟查询一次，切走即停，不在后台刷新；切入场景时立即查询一次；按某一排的额度键只刷新这一排的服务，在设置里点"立即刷新"刷新两者。查询失败时保留上一次读数，设置窗口显示原因。
+- 按键：Codex 排 打开 | 5h | Week | Resets | Credits；Claude 排 打开 | 5h | Week | 5h 重置倒计时 | 周重置倒计时（Claude 没有重置卡，超额用量未开启）。额度键按剩余比例用服务色填充，规则见 [design.md](design.md)"额度键"。
+- CPA 中有 1 个 Claude、2 个 Codex 账号；Codex 排用 Plus 账号（与本机 Codex 同一账号），在设置的 VibeCoding 页可改。
+- 第 3 排计划：任务状态依赖本机客户端（Claude Code hooks、Codex 会话记录），以及 Esc / Enter / Shift+Tab 快捷键。
+
 ## 已知限制与后续方向
 
 - 纯远端 AirPlay（不勾选本机）没有可供当前 Core Audio 采集的本机输出，保留专辑配色慢流光，无法提供真实节奏；本机和远端组合播放已恢复。详见 [rhythm.md](rhythm.md)。
-- VibeCoding 的额度显示 / hooks 提醒，以及合成器场景仍待开发。
+- VibeCoding 第 3 排（任务状态、提醒、快捷键）以及合成器场景仍待开发。
 - 速度偶尔跳到一倍或一半，低频底鼓与贝斯暂未充分分离；当前只影响柔和的节拍脉动。
 - 设备固件版本号在当前设备上可能返回空字符串。
 - 按时间自动夜间降亮暂不做。
