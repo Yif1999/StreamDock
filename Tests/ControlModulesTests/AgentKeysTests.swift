@@ -27,8 +27,8 @@ import Testing
         for slot in 0..<4 { codex.keyDown(slot: slot) }
         #expect(codexSent() == ["36/0", "53/0", "31/\(command | shift)", "36/0"]) // Enter, Esc, ⌘⇧O, Enter
         let (claude, claudeSent) = module(front: AIService.claude.bundleID)
-        claude.keyDown(slot: 2)
-        #expect(claudeSent() == ["45/\(command)"]) // ⌘N
+        for slot in 0..<4 { claude.keyDown(slot: slot) }
+        #expect(claudeSent() == ["36/\(command)", "53/0", "45/\(command)", "36/0"]) // ⌘↩, Esc, ⌘N, Enter
     }
 
     @Test func voiceHoldsFnForAsLongAsTheKeyAndNeverLeavesItDown() {

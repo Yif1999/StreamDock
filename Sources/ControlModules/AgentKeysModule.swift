@@ -5,8 +5,9 @@ import DockCore
 /// Claude desktop app, and only while one of them is the frontmost app; otherwise the keys
 /// dim and send nothing. Shortcuts were read from the apps themselves (2026-10-25):
 /// Codex's command table binds Approve request to Enter and Decline request to Escape, its
-/// new chat to ⌘⇧O; Claude's menu binds New to ⌘N. Voice holds Fn for as long as the key is
-/// held (the user's input method dictates while Fn is down).
+/// new chat to ⌘⇧O; Claude's menu binds New to ⌘N, and its permission prompt approves with ⌘↩
+/// (shown on the prompt; a plain Enter does nothing there). Voice holds Fn for as long as the
+/// key is held (the user's input method dictates while Fn is down).
 @MainActor
 public final class AgentKeysModule: DockModule {
     public let keyCount = 5
@@ -66,7 +67,8 @@ public final class AgentKeysModule: DockModule {
         guard let action = Action(rawValue: slot), let target else { return }
         guard permitted() else { return }
         switch action {
-        case .accept, .send: press(.enter)
+        case .accept: press(target == .codex ? .enter : Keystroke(key: 36, flags: .maskCommand))  // Claude approves with ⌘↩
+        case .send: press(.enter)
         case .stop: press(.escape)
         case .new: press(target == .codex ? Keystroke(key: 31, flags: [.maskCommand, .maskShift])  // ⌘⇧O
                                           : Keystroke(key: 45, flags: .maskCommand))            // ⌘N

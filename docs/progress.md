@@ -100,7 +100,7 @@
 - 上游没有推送，只在 VibeCoding 场景显示时每 5 分钟查询一次，切走即停，不在后台刷新；切入场景时立即查询一次；按某一排的额度键只刷新这一排的服务，在设置里点"立即刷新"刷新两者。查询失败时保留上一次读数，设置窗口显示原因。
 - 按键：Codex 排 打开 | 5h | Week | Resets | Credits；Claude 排 打开 | 5h | Week | 5h 重置倒计时 | 周重置倒计时（Claude 没有重置卡，超额用量未开启）。额度键按剩余比例用服务色填充，规则见 [design.md](design.md)"额度键"。
 - CPA 中有 1 个 Claude、2 个 Codex 账号；Codex 排用 Plus 账号（与本机 Codex 同一账号），在设置的 VibeCoding 页可改。
-- 第 3 排：Accept | Stop | New | Send | Voice，只对前台的 Codex（ChatGPT.app，`com.openai.codex`）或 Claude 桌面应用（`com.anthropic.claudefordesktop`）生效，前台是其他应用时变暗、不发送。快捷键取自两个应用包内（2026-10-25）：Codex 命令表 Approve request = Enter、Decline request = Escape、新对话 ⌘⇧O；Claude 菜单 New = ⌘N；Send 两边都是 Enter（与 Accept 相同，作用取决于当时界面是审批卡片还是输入框）。Voice 按住期间保持 Fn 按下，交给用户的输入法（微信输入法）语音识别。需要「辅助功能」权限（设置的权限一节）。Claude 的 Enter / Esc、Codex 打断任务是否为 Esc、合成的 Fn 能否触发输入法，待实测。
+- 第 3 排：Accept | Stop | New | Send | Voice，只对前台的 Codex（ChatGPT.app，`com.openai.codex`）或 Claude 桌面应用（`com.anthropic.claudefordesktop`）生效，前台是其他应用时变暗、不发送。快捷键取自两个应用包内（2026-10-25）：Codex 命令表 Approve request = Enter、Decline request = Escape、新对话 ⌘⇧O；Claude 菜单 New = ⌘N；Send 两边都是 Enter；Accept 在 Codex 是 Enter，在 Claude 是 ⌘↩（Claude 的权限提示上标的就是 ⌘↩，单按 Enter 无效，2026-10-25 实测）。Voice 按住期间保持 Fn 按下，交给用户的输入法（微信输入法）语音识别。需要「辅助功能」权限（设置的权限一节）。2026-10-25 实测：两个应用里前台判断、New、Send、Stop（Esc 能打断生成）、Voice（合成的 Fn 能触发微信输入法）均正常；Accept 在 Claude（⌘↩）和 Codex（Enter）里都能批准。
 - 任务状态提醒计划只做在灯带上（不占按键），依赖本机客户端（Claude Code hooks、Codex 会话记录），只在 VibeCoding 场景显示。
 
 ## 已知限制与后续方向
