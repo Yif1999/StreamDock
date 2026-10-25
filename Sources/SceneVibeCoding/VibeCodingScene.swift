@@ -3,7 +3,7 @@ import DockCore
 /// Round key 2: AI coding tools (quota, task-finished alerts). Not built yet.
 @MainActor
 public func makeVibeCodingScene() -> DockScene {
-    let scene = DockScene(id: "vibecoding", name: "VibeCoding", defaultLEDColor: RGB(hex: "#AF52DE"))
+    let scene = DockScene(id: "vibecoding", name: "VibeCoding", defaultLEDColor: RGB(hex: "#FF3C00"))
     scene.place(LabelModule(KeyFace(symbol: "chevron.left.forwardslash.chevron.right", caption: "VibeCoding")), keys: [8])
     return scene
 }
