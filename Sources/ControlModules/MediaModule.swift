@@ -66,7 +66,7 @@ public final class MediaModule: DockModule {
         }
         if slot == 4 {
             guard let favorite else { return KeyFace(symbol: "star.fill", caption: "Love", tone: .dim) }
-            let caption = favoriteBusy ? "…" : favoriteFailed ? "Retry" : favorite.enabled ? "Loved" : "Love"
+            let caption = favoriteFailed ? "Retry" : favorite.enabled ? "Loved" : "Love"
             return KeyFace(symbol: "star.fill", caption: caption, tone: favorite.enabled ? .on : .normal)
         }
         let running = music.state != .notRunning

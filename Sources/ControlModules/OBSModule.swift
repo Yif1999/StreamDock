@@ -82,7 +82,6 @@ public final class OBSModule: DockModule {
             symbol = "keyboard"
             caption = binding.target.isEmpty ? "Unset" : binding.target
         }
-        if client.busy && client.lastActionSlot == slot { caption = "…" }
         if client.actionError != nil && client.lastActionSlot == slot { caption = "Failed" }
         if client.command(for: binding) == nil { tone = .dim }
         return KeyFace(symbol: symbol, title: value, caption: caption, tone: tone)

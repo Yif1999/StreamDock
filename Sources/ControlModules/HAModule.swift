@@ -45,8 +45,8 @@ public final class HAModule: DockModule {
         let available = binding.action == .status ? entity?.available == true : client.command(for: binding) != nil
         let on = entity?.active == true
         var caption = name.isEmpty ? "Unset" : name
-        if client.busySlot == slot { caption = "…" }
-        else if client.lastActionSlot == slot, client.errorMessage != nil { caption = "Failed" }
+        // While a command is on its way the name stays (the press already shows); only an outcome replaces it.
+        if client.lastActionSlot == slot, client.errorMessage != nil { caption = "Failed" }
         else if client.successSlot == slot, [.scene, .script].contains(binding.action) { caption = "Sent" }
         // A switch that is on shows its power reading in place of its icon.
         let reading = entity?.state == "on" ? client.meter(for: binding)?.powerText : nil
