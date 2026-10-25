@@ -30,4 +30,45 @@ struct LEDOutputTests {
         #expect(output.render([pixel], gain: 0)[0] == .black)
         #expect(output.render([LightPixel(.white)], gain: 1)[0] == .white)
     }
+    /// A color code lights the LEDs in the proportions a screen shows it: sRGB decoded first.
+    @Test func colorsAreDecodedLikeAScreen() {
+        let orange = LightPixel(RGB(255, 128, 0))
+        #expect(orange.channels.0 == 1 && abs(orange.channels.1 - 0.2158) < 0.001 && orange.channels.2 == 0)
+        #expect(orange.level == 1)
+        // Pure colors are unaffected.
+        #expect(LightPixel(RGB(0, 255, 0)).channels == (0, 1, 0))
+    }
+
+    /// Colors tuned when codes were raw proportions convert to codes that drive the strip the same.
+    @Test func convertedColorsLookTheSameOnTheStrip() {
+        #expect(RGB.fromRawLEDProportions(RGB(hex: "#FF2400")) == RGB(hex: "#FF6900"))
+        #expect(RGB.fromRawLEDProportions(RGB(hex: "#FF0000")) == RGB(hex: "#FF0000"))
+        for old in [RGB(hex: "#85FC5E"), RGB(hex: "#FF5700"), RGB(hex: "#3048FF"), RGB(hex: "#806040")] {
+            let peak = Double(max(old.red, old.green, old.blue))
+            // What the strip used to be driven with: the codes as proportions.
+            let drive = LEDOutput.drive(peak / 255) * 255
+            let before = [old.red, old.green, old.blue].map { Double($0) / peak * drive }
+            var output = LEDOutput()
+            let now = output.render([LightPixel(RGB.fromRawLEDProportions(old))])[0]
+            let after = [Double(now.red), Double(now.green), Double(now.blue)]
+            #expect(zip(before, after).allSatisfy { abs($0 - $1) <= 1.5 }, "\(old.hex): \(before) vs \(after)")
+        }
+    }
+}
+
+@MainActor struct LEDColorMigrationTests {
+    @Test func savedSceneColorsConvertOnce() throws {
+        // Settings in a temporary file, not ~/Library/Preferences (a removed named suite still
+        // leaves an empty plist there).
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("StreamDock.Tests.\(UUID())").path
+        let defaults = try #require(UserDefaults(suiteName: path))
+        defer {
+            defaults.removePersistentDomain(forName: path)
+            try? FileManager.default.removeItem(atPath: path + ".plist")
+        }
+        defaults.set(try JSONEncoder().encode(["vibecoding": RGB(hex: "#85FC5E")]), forKey: "ledColorOverrides")
+        #expect(DockSettings(defaults: defaults).ledColorOverrides["vibecoding"] == RGB(hex: "#BEFCA2"))
+        // Already converted: loading again leaves it alone.
+        #expect(DockSettings(defaults: defaults).ledColorOverrides["vibecoding"] == RGB(hex: "#BEFCA2"))
+    }
 }

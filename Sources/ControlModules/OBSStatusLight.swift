@@ -14,7 +14,7 @@ final class OBSStatusLight: LightAnimation {
     // Saturated LED colors: avoid the white component of UI-style pastel colors.
     static let recordingColor = RGB(hex: "#FF0000")
     static let streamingColor = RGB(hex: "#00FF00")
-    static let pausedColor = RGB(hex: "#FF5500")
+    static let pausedColor = RGB(hex: "#FF9C00")
     let state: OBSOutputState
     init(state: OBSOutputState) { self.state = state }
     var isActive: Bool { state.active }

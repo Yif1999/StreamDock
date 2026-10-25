@@ -26,13 +26,22 @@ public final class DockSettings {
         static let screenBrightness = "screenBrightness"
         static let ledBrightness = "ledBrightness"
         static let ledColors = "ledColorOverrides"
+        /// Set once the saved colors have been converted to sRGB-decoded strip colors.
+        static let ledColorsDecoded = "ledColorOverridesDecoded"
     }
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         screenBrightness = defaults.object(forKey: Keys.screenBrightness) as? Int ?? 80
         ledBrightness = defaults.object(forKey: Keys.ledBrightness) as? Int ?? 100
-        ledColorOverrides = defaults.data(forKey: Keys.ledColors)
+        let saved = defaults.data(forKey: Keys.ledColors)
             .flatMap { try? JSONDecoder().decode([String: RGB].self, from: $0) } ?? [:]
+        ledColorOverrides = saved
+        // Colors picked before the strip decoded sRGB were tuned against raw proportions: convert
+        // them once so they look the same on the strip.
+        if !defaults.bool(forKey: Keys.ledColorsDecoded) {
+            ledColorOverrides = saved.mapValues(RGB.fromRawLEDProportions)
+            defaults.set(true, forKey: Keys.ledColorsDecoded)
+        }
     }
 }

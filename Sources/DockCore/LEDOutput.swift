@@ -8,10 +8,16 @@ public struct LightPixel: Sendable {
         self.channels = (min(1, max(0, channels.0)), min(1, max(0, channels.1)), min(1, max(0, channels.2)))
         self.level = min(1, max(0, level))
     }
+    /// A color as a screen shows it: proportions in linear light (sRGB decoded, so a color code
+    /// looks on the strip as it does on screen), brightness from its largest channel, perceived.
+    /// Until 2026-10-25 the codes themselves were the proportions, which lit small channels several
+    /// times too strongly (pinkish whites, yellowish oranges); colors tuned that way were converted
+    /// with `RGB.fromRawLEDProportions`.
     public init(_ color: RGB) {
-        let peak = Double(max(color.red, color.green, color.blue))
-        channels = peak == 0 ? (0, 0, 0) : (Double(color.red) / peak, Double(color.green) / peak, Double(color.blue) / peak)
-        level = peak / 255
+        let linear = (SRGB.decode(color.red), SRGB.decode(color.green), SRGB.decode(color.blue))
+        let peak = max(linear.0, linear.1, linear.2)
+        channels = peak == 0 ? (0, 0, 0) : (linear.0 / peak, linear.1 / peak, linear.2 / peak)
+        level = Double(max(color.red, color.green, color.blue)) / 255
     }
     public static let black = LightPixel(.black)
     func mixed(with other: LightPixel, amount: Double) -> LightPixel {
@@ -48,5 +54,31 @@ public struct LEDOutput {
             }
             return RGB(UInt8(held[index * 3]), UInt8(held[index * 3 + 1]), UInt8(held[index * 3 + 2]))
         }
+    }
+}
+
+/// The sRGB transfer curve.
+public enum SRGB {
+    public static func decode(_ value: UInt8) -> Double {
+        let v = Double(value) / 255
+        return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+    }
+    public static func encode(_ linear: Double) -> UInt8 {
+        let x = min(1, max(0, linear))
+        let v = x <= 0.0031308 ? 12.92 * x : 1.055 * pow(x, 1 / 2.4) - 0.055
+        return UInt8((v * 255).rounded())
+    }
+}
+
+public extension RGB {
+    /// The color code that looks on the strip as `old` did when codes were used as raw LED
+    /// proportions (before 2026-10-25): same largest channel, the others re-encoded so their
+    /// share of the light is unchanged. Pure colors (only 0 and 255) stay as they are.
+    static func fromRawLEDProportions(_ old: RGB) -> RGB {
+        let peak = max(old.red, old.green, old.blue)
+        guard peak > 0 else { return old }
+        let light = SRGB.decode(peak)
+        func convert(_ value: UInt8) -> UInt8 { SRGB.encode(light * Double(value) / Double(peak)) }
+        return RGB(convert(old.red), convert(old.green), convert(old.blue))
     }
 }

@@ -234,7 +234,7 @@ case "agentlight":
     let color = AgentLight.color(for: service), name = service.name
     let leds = Int(M18Layout.ledCount)
     // Idle shows the scene color at the inactive half brightness, as the app does.
-    let idle = AgentLight.crossfade(Array(repeating: .black, count: leds), Array(repeating: LightPixel(RGB(hex: "#85FC5E")), count: leds), amount: 0.5)
+    let idle = AgentLight.crossfade(Array(repeating: .black, count: leds), Array(repeating: LightPixel(RGB(hex: "#BEFCA2")), count: leds), amount: 0.5)
     typealias Light = (_ time: Double, _ since: Double) -> [LightPixel]
     func motion(_ m: AgentLight.Motion) -> Light { { AgentLight.pixels(AgentLight.levels(m, at: $0, since: $1), color: color, ledCount: leds) } }
     let rest: Light = { _, _ in idle }

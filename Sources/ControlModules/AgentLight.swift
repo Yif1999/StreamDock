@@ -13,12 +13,10 @@ import Foundation
 /// and its quiet version are one curve played at two speeds and brightnesses (the quiet summon
 /// just leaves the short bars out).
 public enum AgentLight {
-    /// Colors for the strip, not the screen. The strip drives each LED channel in proportion to
-    /// these values as they are, with no sRGB decoding, so a small channel lights far more than it
-    /// would on a screen: #FF3A00 lit green at 23% and showed a pale, yellowish orange. Pick them
-    /// as LED proportions, one channel at or near zero (tuned on the strip, 2026-10-25).
+    /// The apps' colors on the strip, tuned on the device (2026-10-25): Codex a periwinkle blue,
+    /// Claude a full orange. Brighter and softer than the key meter colors on purpose.
     public static func color(for service: AIService) -> RGB {
-        service == .codex ? RGB(hex: "#3048FF") : RGB(hex: "#FF2400")
+        service == .codex ? RGB(hex: "#7891FF") : RGB(hex: "#FF6900")
     }
 
     public enum Motion: Sendable {
