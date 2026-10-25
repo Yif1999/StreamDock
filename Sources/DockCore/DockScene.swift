@@ -36,7 +36,7 @@ open class DockScene {
         self.id = id
         self.name = name
         self.defaultLEDColor = defaultLEDColor
-        activities.onChange = { [unowned self] in host?.lightDidChange(in: self, fade: 0.6) }
+        activities.onChange = { [unowned self] fade in host?.lightDidChange(in: self, fade: fade) }
         alerts.onChange = { [unowned self] in host?.lightDidChange(in: self, fade: alerts.color == nil ? 0.6 : 0.18) }
     }
 

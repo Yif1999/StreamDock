@@ -27,12 +27,15 @@ struct StreamDockApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    /// OBS lives in general controls, so its status light belongs to that scene.
+    /// OBS lives in general controls, so its status light belongs to that scene; the Codex and
+    /// Claude reminders belong to VibeCoding.
     private let general = makeGeneralScene()
-    lazy var controller = DockController(scenes: [general, makeVibeCodingScene(), makeSynthScene()])
+    private let vibeCoding = makeVibeCodingScene()
+    lazy var controller = DockController(scenes: [general, vibeCoding, makeSynthScene()])
     private var activity: NSObjectProtocol?
     private var displayPower: DisplayPowerMonitor?
     private var obsLights: OBSLightMonitor?
+    private var agents: AgentMonitor?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Two copies would fight over the device.
@@ -56,12 +59,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.start()
         obsLights = OBSLightMonitor(center: general.activities)
         obsLights?.start()
+        agents = AgentMonitor(center: vibeCoding.activities)
+        agents?.start()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         displayPower?.stop()
         HAClient.shared.disconnect()
         obsLights?.stop()
+        agents?.stop()
         controller.shutdown()
     }
 }

@@ -91,7 +91,9 @@
 
 ## VibeCoding 场景（开发中，2026-10-25）
 
-- 场景色 `#BEFCA2`（用户在灯带上调定，避开两个应用色）。三排都已完成。任务状态提醒只做在灯带上：灯效（单个应用和两个应用同时）已在灯带上逐条演示定稿（见 design.md「编程助手提醒」）；状态逻辑和 Claude / Codex 的 hook 接入待做。
+- 场景色 `#BEFCA2`（用户在灯带上调定，避开两个应用色）。三排都已完成。任务状态提醒只做在灯带上：灯效（单个应用和两个应用同时）已在灯带上逐条演示定稿（见 design.md「编程助手提醒」）。
+- 提醒接入（2026-10-25）：`AgentMonitor` 随应用启动，按会话记录状态（`AgentStatus`，只靠明确信号结束，不用超时），`AgentGlow` 每帧按灯效语言渲染并只放进 VibeCoding 场景的灯光。来源只有两个（用户决定不读取两边的会话记录）：hook 事件（`dock-hook` 经 `~/Library/Application Support/StreamDock/agent.sock` 转给应用，只保留应用、事件名、会话编号、通知类型，丢掉消息正文和工具参数；不输出、总是返回 0、1 秒内退出，应用没运行时直接退出），以及系统告知的前台应用（查看即清除提醒、召唤降为弱版）和应用退出。两处 hook 覆盖不到的情况：Codex 申请联网等权限走 `request_permissions` 工具、不触发批准 hook，由工具名为 `request_permissions` 的 `PreToolUse` 识别（转发程序只转发工具名，不看工具参数；2026-10-25 实测确认），之后的 `PostToolUse` 表示已答复；Claude 被打断、或拒绝一个批准请求（拒绝即结束这一轮），都不发任何 hook：从控台按 Stop 时，控台程序直接把 Claude 最近有动静的那一轮收回空闲；在 Claude 里直接用键盘 Esc 或鼠标打断、拒绝时没有任何信号，灯带保持原状，直到下一条消息（用户接受这个限制，不为此监听键盘）。`idle_prompt`（等你输入）仍然接着：终端里的 Claude Code 可能会发，收到时把仍显示工作中或召唤的会话收回空闲；但 2026-10-25 实测 Claude 桌面应用打断后两分半钟都没有发出它。Claude 桌面应用弹批准提示时触发的是 `Notification` 的 `permission_prompt`（有时也有 `PermissionRequest`），两者都接了。
+- 设置 → VibeCoding → 灯带提醒：显示是否在接收、两边最近的事件；Claude、Codex 的 hook 各自加载、还原；两边共用一个事件转发程序 `dock-hook`，放在最前面，可安装或移除，加载 hook 时也会自动安装，应用启动时更新到最新版（移除前先还原两边的 hook，否则它们会报找不到命令）。加载只合并本程序的条目，还原只删除本程序的条目（凭命令里的 `StreamDock/dock-hook` 识别），每次写入前备份原文件到 `~/Library/Application Support/StreamDock/backups/`。Codex 的新 hook 要在命令行 `/hooks` 里信任一次。`dock-probe hookpreview` 打印加载会写入的内容，不写文件。hook 超时统一 2 秒（Codex 对 Interrupt、SessionEnd 限 3 秒）；设置按当前版本逐条比对，旧配置显示"需要更新"。
 - 2026-10-25 灯带颜色改为先按 sRGB 解码再取灯珠比例，颜色代码在灯带上和屏幕上一致；已调好的颜色换算成新代码，灯带上的样子不变（见 design.md 灯光一节）。
 - **额度来源 CPA**（CLIProxyAPI，自建服务器，远程管理已开启）：两个账号的登录凭据挂在 CPA 上，本机客户端不开也能更新。流程：`GET /v0/management/auth-files` 取账号 → 每个服务一次 `POST /v0/management/api-call`，由 CPA 用该账号的令牌（`$TOKEN$`）发固定的 GET：
   - Claude：`https://api.anthropic.com/api/oauth/usage`（`five_hour` / `seven_day` 的 `utilization`、`resets_at`）；
@@ -101,7 +103,7 @@
 - 上游没有推送，只在 VibeCoding 场景显示时每 5 分钟查询一次，切走即停，不在后台刷新；切入场景时立即查询一次；按某一排的额度键只刷新这一排的服务，在设置里点"立即刷新"刷新两者。查询失败时保留上一次读数，设置窗口显示原因。
 - 按键：Codex 排 打开 | 5h | Week | Resets | Credits；Claude 排 打开 | 5h | Week | 5h 重置倒计时 | 周重置倒计时（Claude 没有重置卡，超额用量未开启）。额度键按剩余比例用服务色填充，规则见 [design.md](design.md)"额度键"。
 - CPA 中有 1 个 Claude、2 个 Codex 账号；Codex 排用 Plus 账号（与本机 Codex 同一账号），在设置的 VibeCoding 页可改。
-- 第 3 排：Accept | Stop | New | Send | Voice，只对前台的 Codex（ChatGPT.app，`com.openai.codex`）或 Claude 桌面应用（`com.anthropic.claudefordesktop`）生效，前台是其他应用时变暗、不发送。快捷键取自两个应用包内（2026-10-25）：Codex 命令表 Approve request = Enter、Decline request = Escape、新对话 ⌘⇧O；Claude 菜单 New = ⌘N；Send 两边都是 Enter；Accept 在 Codex 是 Enter，在 Claude 是 ⌘↩（Claude 的权限提示上标的就是 ⌘↩，单按 Enter 无效，2026-10-25 实测）。Voice 按住期间保持 Fn 按下，交给用户的输入法（微信输入法）语音识别。需要「辅助功能」权限（设置的权限一节）。2026-10-25 实测：两个应用里前台判断、New、Send、Stop（Esc 能打断生成）、Voice（合成的 Fn 能触发微信输入法）均正常；Accept 在 Claude（⌘↩）和 Codex（Enter）里都能批准。
+- 第 3 排：Accept | Stop | New | Send | Voice，只对前台的 Codex（ChatGPT.app，`com.openai.codex`）或 Claude 桌面应用（`com.anthropic.claudefordesktop`）生效，前台是其他应用时变暗、不发送。快捷键取自两个应用包内（2026-10-25）：Codex 命令表 Approve request = Enter、Decline request = Escape、新对话 ⌘⇧O；Claude 菜单 New = ⌘N；Send 两边都是 Enter；Accept 在 Codex 是 Enter，在 Claude 是 ⌘↩（Claude 的权限提示上标的就是 ⌘↩，单按 Enter 无效，2026-10-25 实测）。Voice 按住期间保持 Fn 按下，交给用户的输入法（微信输入法）语音识别。需要「辅助功能」权限（设置的权限一节）。2026-10-25 实测：两个应用里前台判断、New、Send、Stop（Esc 能打断生成）、Voice（合成的 Fn 能触发微信输入法）均正常；Accept 在 Claude（⌘↩）和 Codex（Enter）里都能批准。Codex 的 Esc 要按两次才停止（第一次只是准备停止，按钮变成 ESC 提示，这是它防误触的设计），所以控台的 Stop 在 Codex 正在工作（灯带巡航）时连发两次 Esc（间隔 0.15 秒），按一下就停；Codex 在等批准时只发一次，即拒绝这个请求，不能再跟第二个；Codex 空闲或前台是 Claude 时也只发一次。是否在工作取自灯带提醒的状态。
 - 任务状态提醒计划只做在灯带上（不占按键），依赖本机客户端（Claude Code hooks、Codex 会话记录），只在 VibeCoding 场景显示。
 
 ## 已知限制与后续方向

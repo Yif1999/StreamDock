@@ -11,6 +11,7 @@ let package = Package(
     products: [
         .executable(name: "DockApp", targets: ["DockApp"]),
         .executable(name: "dock-probe", targets: ["DockProbe"]),
+        .executable(name: "dock-hook", targets: ["DockHook"]),
     ],
     targets: [
         // Official MiraBox transport library (closed source, prebuilt universal dylib).
@@ -54,6 +55,9 @@ let package = Package(
         .target(name: "SceneGeneral", dependencies: ["DockCore", "ControlModules"]),
         .target(name: "SceneVibeCoding", dependencies: ["DockCore", "ControlModules"]),
         .target(name: "SceneSynth", dependencies: ["DockCore"]),
+
+        // The hook command Claude Code and Codex run; Foundation only, starts in milliseconds.
+        .executableTarget(name: "DockHook"),
 
         .executableTarget(
             name: "DockApp",

@@ -4,8 +4,9 @@ import DockCore
 /// VibeCoding row 3: Accept | Stop | New | Send | Voice, sent as keystrokes to the Codex or
 /// Claude desktop app, and only while one of them is the frontmost app; otherwise the keys
 /// dim and send nothing. Shortcuts were read from the apps themselves (2026-10-25):
-/// Codex's command table binds Approve request to Enter and Decline request to Escape, its
-/// new chat to ⌘⇧O; Claude's menu binds New to ⌘N, and its permission prompt approves with ⌘↩
+/// Codex's command table binds Approve request to Enter and Decline request to Escape (a working
+/// turn stops on a second Escape, so Stop sends two while Codex works, one to decline a request),
+/// its new chat to ⌘⇧O; Claude's menu binds New to ⌘N, and its permission prompt approves with ⌘↩
 /// (shown on the prompt; a plain Enter does nothing there). Voice holds Fn for as long as the
 /// key is held (the user's input method dictates while Fn is down).
 @MainActor
@@ -32,6 +33,17 @@ public final class AgentKeysModule: DockModule {
     var press: @MainActor (Keystroke) -> Void = AgentKeysModule.post
     var setFn: @MainActor (Bool) -> Void = AgentKeysModule.postFn
     var permitted: @MainActor () -> Bool = AgentKeysModule.ensurePermission
+    /// Whether Codex is working on a turn and not waiting on you, from the light-strip
+    /// reminders. While it waits on an approval, Esc declines that request instead.
+    /// Tells the reminders that Stop ended a turn (Claude reports that with no hook).
+    var stopped: @MainActor (AIService) -> Void = { AgentMonitor.current?.consoleStopped($0) }
+    var codexWorking: @MainActor () -> Bool = {
+        guard let status = AgentMonitor.current?.status else { return false }
+        return status.light(for: .codex, at: ProcessInfo.processInfo.systemUptime) == .cruise
+    }
+    /// Codex stops on a second Esc (the first only arms it, against slips); the pause lets the
+    /// first one land.
+    static let confirmGap: Duration = .milliseconds(150)
 
     public init() {}
 
@@ -69,7 +81,17 @@ public final class AgentKeysModule: DockModule {
         switch action {
         case .accept: press(target == .codex ? .enter : Keystroke(key: 36, flags: .maskCommand))  // Claude approves with ⌘↩
         case .send: press(.enter)
-        case .stop: press(.escape)
+        case .stop:
+            press(.escape)
+            stopped(target)
+            // One press of our Stop stops either app: Codex wants its Esc twice while it works.
+            // Waiting on an approval, one Esc declines it, and a second must not follow.
+            if target == .codex && codexWorking() {
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: Self.confirmGap)
+                    self?.press(.escape)
+                }
+            }
         case .new: press(target == .codex ? Keystroke(key: 31, flags: [.maskCommand, .maskShift])  // ⌘⇧O
                                           : Keystroke(key: 45, flags: .maskCommand))            // ⌘N
         case .voice:

@@ -11,6 +11,7 @@
 //   dock-probe ledfps [rate…]  light strip white/off flips at each rate, for a slow-motion video
 //   dock-probe agentlight [codex|claude|both]  light-strip reminders, as a narrated story
 //   dock-probe ledbench [seconds]  light-strip frames at 60 Hz: dropped frames and send lateness
+//   dock-probe hookpreview     what loading the Codex / Claude hooks would write (writes nothing)
 
 import AppKit
 import ImageIO
@@ -377,6 +378,14 @@ case "ledbench":
     print(String(format: "%d frames in %.1f s, dropped %d; send lateness median %.1f ms, p99 %.1f ms, max %.1f ms",
                  frame, seconds, device.droppedLEDFrames, late[late.count / 2], late[late.count * 99 / 100], late.last ?? 0))
     device.close(notifyDevice: true)
+case "hookpreview":
+    // dock-probe hookpreview: what Settings → 加载 would write into each app's config, computed
+    // from the files as they are now. Writes nothing.
+    for service in AIService.allCases {
+        let url = AgentHooks.configFile(for: service)
+        print("== \(url.path)\(FileManager.default.fileExists(atPath: url.path) ? "" : "（新建）")")
+        print(try AgentHooks.preview(service))
+    }
 case "keytest":
     // Pixel test patterns on the top row, to see whether the firmware shows 64×64 key images
     // 1:1 or scales them: 1-px stripes stay crisp only at 1:1.

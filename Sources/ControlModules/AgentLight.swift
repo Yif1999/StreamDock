@@ -233,11 +233,12 @@ public enum AgentLight {
 
     /// Both need you: the summon pulses take turns, one cycle each; the color passes to the next
     /// app in the last quarter of a cycle, after the flash has faded.
-    public static func alternatingSummon(_ colors: [RGB], at time: TimeInterval, since start: TimeInterval = 0, ledCount: Int) -> [LightPixel] {
+    public static func alternatingSummon(_ colors: [RGB], quiet: Bool = false, at time: TimeInterval, since start: TimeInterval = 0, ledCount: Int) -> [LightPixel] {
         let age = max(0, time - start)
-        let cycle = Int((age / summonPeriod).rounded(.down))
-        let u = age / summonPeriod - Double(cycle)
-        let levels = levels(.summon, at: time, since: start)
+        let period = quiet ? quietPeriod : summonPeriod
+        let cycle = Int((age / period).rounded(.down))
+        let u = age / period - Double(cycle)
+        let levels = levels(quiet ? .quietSummon : .summon, at: time, since: start)
         let now = pixels(levels, color: colors[cycle % colors.count], ledCount: ledCount)
         let next = pixels(levels, color: colors[(cycle + 1) % colors.count], ledCount: ledCount)
         return crossfade(now, next, amount: (u - 0.75) / 0.25)

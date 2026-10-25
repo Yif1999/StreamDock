@@ -6,17 +6,20 @@ import Foundation
 public final class LightActivityCenter {
     private struct Entry { let priority: Int; let animation: LightAnimation }
     private var entries: [String: Entry] = [:]
-    var onChange: (() -> Void)?
+    /// Called with how long the strip should take to ease into the change.
+    var onChange: ((TimeInterval) -> Void)?
     public init() {}
 
-    public func set(_ animation: LightAnimation?, for id: String, priority: Int = 100) {
+    /// `fade`: how long the strip eases into the change (an activity that ends after its own
+    /// fade-out may want longer than the default).
+    public func set(_ animation: LightAnimation?, for id: String, priority: Int = 100, fade: TimeInterval = 0.6) {
         if let animation {
             if let old = entries[id], old.animation === animation, old.priority == priority { return }
             entries[id] = Entry(priority: priority, animation: animation)
         } else {
             guard entries.removeValue(forKey: id) != nil else { return }
         }
-        onChange?()
+        onChange?(fade)
     }
 
     var leading: LightAnimation? {

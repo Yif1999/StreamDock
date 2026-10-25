@@ -37,7 +37,7 @@ struct SettingsView: View {
                 .tabItem { Label("智能家居", systemImage: "house") }.tag("home")
             Form { OBSSettingsSection() }
                 .tabItem { Label("OBS", systemImage: "video") }.tag("obs")
-            Form { CPASettingsSection() }
+            Form { CPASettingsSection(); AgentSettingsSection() }
                 .tabItem { Label("VibeCoding", systemImage: "chevron.left.forwardslash.chevron.right") }.tag("vibecoding")
         }
         .formStyle(.grouped)
