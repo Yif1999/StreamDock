@@ -20,19 +20,22 @@ import Testing
         #expect(kept.chroma > plain.chroma * 2, "plain \(plain.chroma) kept \(kept.chroma)")
     }
 
-    @Test func gradingNeverLeavesAPaletteDull() {
-        // Black-and-white artwork: a soft warm white pair.
-        let none = ArtworkPalette.refine([])
-        #expect(none.count == 2)
-        // One washed-out blue-grey: vivid enough, plus an analogous partner.
-        let single = ArtworkPalette.refine([RGB(110, 120, 140)]).map(OKLab.init(srgb:))
-        #expect(single.count == 2)
-        #expect(single.allSatisfy { $0.chroma >= ArtworkPalette.minChroma * 0.75 }, "\(single.map(\.chroma))")
-        #expect(abs(single[0].hue - single[1].hue) > 0.3)
-        // Dark brown becomes a vivid amber of the same hue.
-        let brown = OKLab(srgb: RGB(90, 55, 25))
-        let amber = OKLab(srgb: ArtworkPalette.refine([RGB(90, 55, 25)])[0])
-        #expect(amber.chroma > brown.chroma && abs(amber.hue - brown.hue) < 0.1)
+    /// The strip shows the cover's own colors: nothing lifted, nothing invented.
+    @Test func paletteKeepsTheCoversOwnColors() {
+        func cover(_ parts: [(RGB, Int)]) -> [OKLab] { parts.flatMap { Array(repeating: OKLab(srgb: $0.0), count: $0.1) } }
+        // A grey-green cover with a few vivid pixels: a faintly tinted white, never their blue.
+        let grey = ArtworkPalette.palette(from: cover([(RGB(205, 215, 210), 990), (RGB(20, 110, 220), 10)])).map(OKLab.init(srgb:))
+        #expect(grey.count == 2 && grey.allSatisfy { $0.chroma < 0.03 }, "\(grey.map(\.chroma))")
+        // Red over white: the red as it is, then a white for the white area.
+        let red = RGB(180, 40, 50)
+        let redWhite = ArtworkPalette.palette(from: cover([(red, 600), (RGB(245, 240, 235), 400)])).map(OKLab.init(srgb:))
+        #expect(redWhite.count == 2 && abs(redWhite[0].chroma - OKLab(srgb: red).chroma) < 0.01 && redWhite[1].chroma < 0.03)
+        // Near-black gives no light: a small blue patch on black is the whole palette, with a paler shade of itself.
+        let blue = ArtworkPalette.palette(from: cover([(RGB(8, 8, 10), 900), (RGB(30, 80, 200), 100)])).map(OKLab.init(srgb:))
+        #expect(blue.count == 2 && abs(blue[0].hue - blue[1].hue) < 0.01 && blue[1].chroma < blue[0].chroma)
+        // A dark green still counts by its area, not its darkness.
+        let green = ArtworkPalette.palette(from: cover([(RGB(20, 60, 30), 500), (RGB(240, 240, 240), 500)])).map(OKLab.init(srgb:))
+        #expect(green.contains { $0.chroma > 0.05 && abs($0.hue - OKLab(srgb: RGB(20, 60, 30)).hue) < 0.1 })
     }
 
     /// A light accent stays local, a heavy one fills the ring.

@@ -72,8 +72,9 @@ struct GeneralControlsTests {
     @Test func failedDisplaySleepIsVisible() async throws {
         let module = DisplaySleepModule(hold: Self.hold) { false }
         module.keyDown(slot: 0)
+        // Sleeping runs after the hold completes, in a task of its own: wait for its outcome.
         let deadline = ContinuousClock.now + .seconds(3)
-        while module.hold.isRunning && ContinuousClock.now < deadline {
+        while module.face(forSlot: 0).caption != "Failed" && ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(30))
         }
         #expect(module.face(forSlot: 0).caption == "Failed")

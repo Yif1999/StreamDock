@@ -1,7 +1,7 @@
 import AppKit
 import DockCore
 
-/// Picks a few vivid, distinct colors from album artwork, tuned for LEDs (see `refine`).
+/// The colors album artwork gives the light strip, as the cover has them (see `palette`).
 public enum ArtworkPalette {
     static let fallback = [RGB(255, 214, 170), RGB(255, 170, 120)]
 
@@ -23,97 +23,70 @@ public enum ArtworkPalette {
         context.draw(image, in: CGRect(x: 0, y: 0, width: side, height: side))
         guard let buffer = context.data else { return fallback }
         let pixels = Array(UnsafeBufferPointer(start: buffer.assumingMemoryBound(to: UInt8.self), count: side * side * 4))
+        return palette(from: stride(from: 0, to: pixels.count, by: 4).map {
+            OKLab(srgb: RGB(pixels[$0], pixels[$0 + 1], pixels[$0 + 2]))
+        }, maxColors: maxColors)
+    }
 
-        // Hue histogram in 24 buckets, weighted towards saturated, bright pixels.
+    /// The light the cover gives off, as it is (2026-10-25: grading that lifted chroma made
+    /// near-grey covers glow saturated blue, a color they do not have):
+    /// - a pixel is colored when its OKLab chroma reaches `colorChroma` (HSV saturation would
+    ///   call dark pixels vivid);
+    /// - every pixel counts by area, except black: an uncolored pixel darker than lightness 0.3
+    ///   fades out (nothing under 0.2), since black gives no light; white and grey areas count
+    ///   as white light. Dark colored pixels (deep green hair, a navy sky) count in full;
+    /// - a hue enters the palette only with at least `minShare` of the cover's light, so a few
+    ///   stray pixels never set the colors; up to `maxColors` hues, strongest first, each the
+    ///   plain average of its pixels — no chroma lift, no lightness change, no invented partner;
+    /// - uncolored light with at least `whiteShare` adds a white tinted like those pixels; a
+    ///   cover with no hue at all is that white alone;
+    /// - a single color gets a paler shade of itself, so the flow has something to move against.
+    static let colorChroma = 0.04, minShare = 0.05, whiteShare = 0.3
+    static func palette(from pixels: [OKLab], maxColors: Int = 4) -> [RGB] {
         let bucketCount = 24
-        var weight = [Double](repeating: 0, count: bucketCount)
-        var sums = [(r: Double, g: Double, b: Double)](repeating: (0, 0, 0), count: bucketCount)
-        for index in stride(from: 0, to: pixels.count, by: 4) {
-            let color = NSColor(
-                srgbRed: CGFloat(pixels[index]) / 255, green: CGFloat(pixels[index + 1]) / 255,
-                blue: CGFloat(pixels[index + 2]) / 255, alpha: 1
-            )
-            let saturation = Double(color.saturationComponent)
-            let brightness = Double(color.brightnessComponent)
-            guard saturation > 0.2, brightness > 0.2 else { continue }
-            let bucket = min(bucketCount - 1, Int(Double(color.hueComponent) * Double(bucketCount)))
-            let w = saturation * saturation * brightness
-            weight[bucket] += w
-            sums[bucket].r += Double(color.redComponent) * w
-            sums[bucket].g += Double(color.greenComponent) * w
-            sums[bucket].b += Double(color.blueComponent) * w
-        }
-
-        // Strongest hues first, skipping ones too close to a color already picked.
-        let total = weight.reduce(0, +)
-        // Nothing colorful at all (black-and-white artwork): a soft warm white.
-        guard total > 0 else { return refine([]) }
-        var picked: [(hue: Double, color: NSColor)] = []
-        for bucket in weight.indices.sorted(by: { weight[$0] > weight[$1] }) {
-            guard weight[bucket] > total * 0.04, picked.count < maxColors else { break }
-            let color = NSColor(
-                srgbRed: sums[bucket].r / weight[bucket], green: sums[bucket].g / weight[bucket],
-                blue: sums[bucket].b / weight[bucket], alpha: 1
-            )
-            let hue = Double(color.hueComponent)
-            guard picked.allSatisfy({ hueDistance($0.hue, hue) > 0.08 }) else { continue }
-            picked.append((hue, color))
-        }
-        return refine(picked.map { item in
-            RGB(
-                UInt8((item.color.redComponent * 255).rounded()),
-                UInt8((item.color.greenComponent * 255).rounded()),
-                UInt8((item.color.blueComponent * 255).rounded())
-            )
-        })
-    }
-
-    /// Light-strip color grading, in OKLCh. An LED shows a color at whatever brightness the
-    /// glow asks for, so only hue and chroma matter here:
-    /// - washed-out colors get chroma up to `minChroma` (a dull blue-grey cover still glows
-    ///   blue), vivid ones a gentle boost (`chromaBoost`);
-    /// - lightness is free: each color moves to the lightness where its hue can be that vivid
-    ///   in sRGB (yellow is only vivid when light, blue when dark), staying near its own;
-    ///   a dark brown becomes the warm amber it is a shade of;
-    /// - a single hue gets an analogous partner `partnerShift` radians away, so the flow has
-    ///   something to move against; no hue at all gives a soft warm white pair.
-    static let minChroma = 0.1, chromaBoost = 1.15, partnerShift = 0.45
-    static func refine(_ colors: [RGB]) -> [RGB] {
-        let neutral = 0.02
-        let labs = colors.map(OKLab.init(srgb:)).filter { $0.chroma > neutral }
-        guard let first = labs.first else {
-            return [OKLab(l: 0.9, chroma: 0.04, hue: 1.2), OKLab(l: 0.85, chroma: 0.06, hue: 0.9)].map(\.srgb)
-        }
-        var graded = labs.map { vivid(hue: $0.hue, chroma: max(minChroma, $0.chroma * chromaBoost), near: $0.l) }
-        if graded.count == 1 {
-            graded.append(vivid(hue: first.hue + partnerShift, chroma: graded[0].chroma * 0.8, near: graded[0].l + 0.05))
-        }
-        return graded.map(\.srgb)
-    }
-
-    /// The color of this hue closest to `chroma`, at the lightness (0.5…0.97) that allows it,
-    /// preferring one near `near`.
-    static func vivid(hue: Double, chroma: Double, near lightness: Double) -> OKLab {
-        var best = OKLab(l: 0.75, a: 0, b: 0), bestScore = -Double.infinity
-        for l in stride(from: 0.5, through: 0.97, by: 0.01) {
-            // Largest in-gamut chroma at this lightness, by bisection.
-            var low = 0.0, high = 0.4
-            for _ in 0..<20 {
-                let mid = (low + high) / 2
-                if OKLab(l: l, chroma: mid, hue: hue).isInGamut { low = mid } else { high = mid }
+        var light = [Double](repeating: 0, count: bucketCount)
+        var sums = [OKLab](repeating: OKLab(l: 0, a: 0, b: 0), count: bucketCount)
+        var white = 0.0, whiteSum = OKLab(l: 0, a: 0, b: 0), total = 0.0
+        for pixel in pixels {
+            let colored = pixel.chroma >= colorChroma
+            let weight = colored ? 1 : min(1, max(0, (pixel.l - 0.2) / 0.1))
+            total += weight
+            guard colored else {
+                white += weight
+                whiteSum = OKLab(l: whiteSum.l + pixel.l * weight, a: whiteSum.a + pixel.a * weight, b: whiteSum.b + pixel.b * weight)
+                continue
             }
-            let reached = min(chroma, low)
-            let score = reached - 0.05 * abs(l - min(0.92, max(0.55, lightness)))
-            if score > bestScore {
-                bestScore = score
-                best = OKLab(l: l, chroma: reached, hue: hue)
-            }
+            let turn = (pixel.hue / (2 * .pi) + 1).truncatingRemainder(dividingBy: 1)
+            let bucket = min(bucketCount - 1, Int(turn * Double(bucketCount)))
+            light[bucket] += weight
+            sums[bucket] = OKLab(l: sums[bucket].l + pixel.l * weight, a: sums[bucket].a + pixel.a * weight, b: sums[bucket].b + pixel.b * weight)
         }
-        return best
+        guard total > 0.01 else { return fallback }
+
+        var members: [(light: Double, color: OKLab)] = []
+        for bucket in light.indices.sorted(by: { light[$0] > light[$1] }) {
+            guard light[bucket] >= total * minShare, members.count < maxColors else { break }
+            let w = light[bucket]
+            let color = OKLab(l: sums[bucket].l / w, a: sums[bucket].a / w, b: sums[bucket].b / w)
+            guard members.allSatisfy({ hueDistance($0.color.hue, color.hue) > 0.5 }) else { continue }
+            members.append((w, color))
+        }
+        if white >= total * whiteShare || members.isEmpty {
+            // The tint of the uncolored pixels, shown as light (lightness is the strip's business).
+            let tint = OKLab(l: 0.9, a: whiteSum.a / max(white, 1e-6), b: whiteSum.b / max(white, 1e-6))
+            members.append((white, tint))
+            members.sort { $0.light > $1.light }
+        }
+        var colors = members.map(\.color)
+        if colors.count == 1, let only = colors.first {
+            colors.append(OKLab(l: min(0.95, only.l + 0.05), chroma: only.chroma * 0.7, hue: only.hue))
+        }
+        return colors.map(\.srgb)
     }
 
+    /// Hue distance in radians, 0…π.
     private static func hueDistance(_ a: Double, _ b: Double) -> Double {
-        let d = abs(a - b)
-        return min(d, 1 - d)
+        let d = abs(a - b).truncatingRemainder(dividingBy: 2 * .pi)
+        return min(d, 2 * .pi - d)
     }
 }
