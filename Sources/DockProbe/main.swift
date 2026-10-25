@@ -8,9 +8,10 @@
 //   dock-probe ddc             read brightness / volume from the external monitor over DDC
 //   dock-probe cpa <base-url>  read-only: CPA accounts and the Claude / Codex quota replies (key in CPA_KEY)
 //   dock-probe fpstest [rate…] [--all]  frame numbers at each rate, for a slow-motion video
-//   dock-probe ledfps [rate…]  light strip white/off flips at each rate, for a slow-motion video
 //   dock-probe agentlight [codex|claude|both]  light-strip reminders, as a narrated story
 //   dock-probe ledbench [seconds]  light-strip frames at 60 Hz: dropped frames and send lateness
+//   dock-probe ledwalk [rate…]  one lit LED walking the ring at each rate, for a slow-motion video
+//   dock-probe ledscan <video> [rate…]  read an ledwalk video: frames the strip actually showed
 //   dock-probe hookpreview     what loading the Codex / Claude hooks would write (writes nothing)
 
 import AppKit
@@ -190,42 +191,6 @@ case "fpstest":
         }
     }
     device.close(notifyDevice: true)
-case "ledfps":
-    // dock-probe ledfps [rate…]: the whole strip flips between full white and off on every
-    // frame at each rate (default 30 60 90 120), 4 s each, after a 2 s colored card (red 30,
-    // green 60, blue 90, white 120, else yellow). Film it in slow motion: a strip that keeps up
-    // shows one flip per frame sent; dropped or merged flips mean it shows fewer frames.
-    guard let identity = M18Device.attached().first else {
-        print("no M18 attached")
-        break
-    }
-    let rates = arguments.dropFirst().compactMap(Double.init).filter { $0 > 0 }
-    let cards: [Double: (UInt8, UInt8, UInt8)] = [30: (255, 0, 0), 60: (0, 255, 0), 90: (0, 0, 255), 120: (255, 255, 255)]
-    let count = Int(M18Layout.ledCount)
-    let device = try M18Device(opening: identity) { _ in }
-    device.setLEDBrightness(100)
-    for rate in rates.isEmpty ? [30, 60, 90, 120] : rates {
-        let card = cards[rate] ?? (255, 200, 0)
-        print("\(Int(rate)) frames/s: card for 2 s, then 4 s of white/off flips")
-        // Per-LED frames show when the next one arrives: keep sending the card while it shows.
-        let cardEnd = Date().addingTimeInterval(2)
-        while Date() < cardEnd {
-            device.setLEDFrame(Array(repeating: card, count: count))
-            Thread.sleep(forTimeInterval: 1.0 / 30)
-        }
-        let start = Date()
-        for frame in 0..<Int(rate * 4) {
-            let due = start.addingTimeInterval(Double(frame) / rate)
-            if due > Date() { Thread.sleep(until: due) }
-            let level: UInt8 = frame % 2 == 0 ? 255 : 0
-            device.setLEDFrame(Array(repeating: (level, level, level), count: count))
-        }
-        device.waitUntilIdle()
-    }
-    device.setLEDFrame(Array(repeating: (0, 0, 0), count: count))
-    device.setLEDFrame(Array(repeating: (0, 0, 0), count: count))
-    device.waitUntilIdle()
-    device.close(notifyDevice: true)
 case "agentlight":
     // dock-probe agentlight [codex|claude|both] [step…] [--sheet <out.png>]: one app's (or both apps') light-strip reminders
     // as a story, each step announced aloud before its light, states running into each other as
@@ -378,6 +343,31 @@ case "ledbench":
     print(String(format: "%d frames in %.1f s, dropped %d; send lateness median %.1f ms, p99 %.1f ms, max %.1f ms",
                  frame, seconds, device.droppedLEDFrames, late[late.count / 2], late[late.count * 99 / 100], late.last ?? 0))
     device.close(notifyDevice: true)
+case "ledwalk":
+    // dock-probe ledwalk [rate…]: measures the light strip's refresh with a camera, not by eye.
+    // One white LED walks the ring, one LED per frame sent, so every frame the strip shows is a
+    // distinct position and every frame it skips is a missing position. Timeline (`LEDWalk`):
+    // all-white marker, a slow calibration lap that locates each LED in the video, then for each
+    // rate (default 30 60 120 240) a marker and 4 s of walking. Each send waits for its USB write,
+    // so the host side is measured too. Film at 240 fps; read the video with `ledscan`.
+    guard let identity = M18Device.attached().first else { print("no M18 attached"); break }
+    let rates = arguments.dropFirst().compactMap(Double.init).filter { $0 > 0 }
+    let device = try M18Device(opening: identity) { _ in }
+    device.setLEDBrightness(100)
+    LEDWalk.play(on: device, rates: rates.isEmpty ? LEDWalk.defaultRates : rates)
+    device.close(notifyDevice: true)
+case "ledscan":
+    // dock-probe ledscan <video> [rate…]: reads a 240 fps video of `ledwalk` (same rates).
+    // `ledscan --simulate <strip Hz> [rate…]` reads a made-up video of a strip with that refresh instead.
+    guard let path = arguments.dropFirst().first else { print("usage: dock-probe ledscan <video> [rate…]"); break }
+    if path == "--simulate", let strip = arguments.dropFirst(2).first.flatMap(Double.init) {
+        let rates = arguments.dropFirst(3).compactMap(Double.init).filter { $0 > 0 }
+        print("simulated strip refreshing at \(strip) Hz")
+        try LEDScan.analyse(LEDScan.simulate(stripRate: strip, rates: rates.isEmpty ? LEDWalk.defaultRates : rates), rates: rates.isEmpty ? LEDWalk.defaultRates : rates)
+        break
+    }
+    let rates = arguments.dropFirst(2).compactMap(Double.init).filter { $0 > 0 }
+    try LEDScan.run(video: URL(fileURLWithPath: path), rates: rates.isEmpty ? LEDWalk.defaultRates : rates)
 case "hookpreview":
     // dock-probe hookpreview: what Settings → 加载 would write into each app's config, computed
     // from the files as they are now. Writes nothing.
