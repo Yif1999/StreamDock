@@ -91,7 +91,7 @@
 
 ## VibeCoding 场景（开发中，2026-10-25）
 
-- 场景色 `#FF3C00`（Claude 主题橙的灯带版本）。第 1、2 排完成，第 3 排（任务状态、快捷键）待做。
+- 场景色 `#FC8FFF`（用户在灯带上调定）。第 1、2 排完成，第 3 排（任务状态、快捷键）待做。
 - **额度来源 CPA**（CLIProxyAPI，自建服务器，远程管理已开启）：两个账号的登录凭据挂在 CPA 上，本机客户端不开也能更新。流程：`GET /v0/management/auth-files` 取账号 → 每个服务一次 `POST /v0/management/api-call`，由 CPA 用该账号的令牌（`$TOKEN$`）发固定的 GET：
   - Claude：`https://api.anthropic.com/api/oauth/usage`（`five_hour` / `seven_day` 的 `utilization`、`resets_at`）；
   - Codex：`https://chatgpt.com/backend-api/wham/usage`（`rate_limit` 的两个窗口按 `limit_window_seconds` 区分 5h / 周、`credits.balance`、`rate_limit_reset_credits.available_count`）。
