@@ -109,14 +109,18 @@ public enum HAAction: String, Codable, CaseIterable, Identifiable {
         case .status: true
         }
     }
+    /// Switch keys that show the device's power reading while it is on.
+    public var showsMeter: Bool { [.safePower, .toggle, .turnOn, .turnOff].contains(self) }
 }
 
 public struct HABinding: Codable, Equatable {
     public var action: HAAction
     public var entityID: String
     public var label: String
-    public init(action: HAAction = .none, entityID: String = "", label: String = "") {
-        self.action = action; self.entityID = entityID; self.label = label
+    /// The power sensor a switch key reads: `nil` finds the device's own, `""` shows none.
+    public var meterEntityID: String?
+    public init(action: HAAction = .none, entityID: String = "", label: String = "", meterEntityID: String? = nil) {
+        self.action = action; self.entityID = entityID; self.label = label; self.meterEntityID = meterEntityID
     }
 }
 
@@ -138,10 +142,19 @@ public struct HAEntity: Identifiable, Equatable, Sendable {
     var keyMode: String {
         ["off": "Off", "auto": "Auto", "cool": "Cool", "heat": "Heat", "dry": "Dry", "fan_only": "Fan", "heat_cool": "H/C"][state] ?? state
     }
+    /// A sensor that measures power (W or kW).
+    var isPowerSensor: Bool { domain == "sensor" && ["W", "kW"].contains(attributes["unit_of_measurement"]?.string) }
+    /// A power reading as a key shows it: whole watts, or kW with one decimal from 1000 W.
+    var powerText: String? {
+        guard isPowerSensor, let value = Double(state), value.isFinite else { return nil }
+        let watts = max(0, attributes["unit_of_measurement"]?.string == "kW" ? value * 1000 : value)
+        return watts.rounded() < 1000 ? "\(Int(watts.rounded()))W" : String(format: "%.1fkW", watts / 1000)
+    }
     /// The state as a key shows it: a number when there is one, else a short English word.
     /// (The settings window keeps `displayState`.)
     var keyState: String {
         if state == "unavailable" { return "Offline" }
+        if let powerText { return powerText }
         if state == "unknown" { return domain == "scene" ? "Ready" : "Unknown" }
         if domain == "climate" { return state == "off" ? "Off" : targetTemperature ?? keyMode }
         if domain == "fan", state == "on", let p = attributes["percentage"]?.number { return "\(Int(p))%" }

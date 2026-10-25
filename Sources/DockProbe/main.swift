@@ -314,7 +314,7 @@ struct SheetKey {
     ]
     let home: [SheetKey] = [
         .init(value: "26°", label: "A/C", tone: .on), .init(symbol: "minus", label: "A/C"), .init(symbol: "plus", label: "A/C"),
-        .init(value: "Cool", label: "A/C"), .init(symbol: "powerplug.fill", label: "PC", tone: .on),
+        .init(value: "Cool", label: "A/C"), .init(value: "86W", label: "PC", tone: .on),
         .init(value: "40%", label: "Fan", tone: .on), .init(symbol: "minus", label: "Fan"), .init(symbol: "plus", label: "Fan"),
         .init(symbol: "arrow.left.and.right", label: "Fan", tone: .on), .init(value: "Natural", label: "Fan"),
         .init(symbol: "power", label: "Light Bar"), .init(symbol: "sun.min.fill", label: "Light Bar", tone: .dim),

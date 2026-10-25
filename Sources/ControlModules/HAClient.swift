@@ -21,6 +21,8 @@ public final class HAClient {
     public private(set) var address: String
     public private(set) var connection: Connection = .offline("请填写地址和访问令牌")
     public private(set) var entities: [HAEntity] = []
+    /// The device each entity belongs to, from HA's entity registry.
+    public private(set) var devices: [String: String] = [:]
     public private(set) var bindings: [HABinding]
     public private(set) var errorMessage: String?
     public private(set) var busySlot: Int?
@@ -79,6 +81,17 @@ public final class HAClient {
     }
     public func choices(for action: HAAction) -> [HAEntity] { entities.filter { action.accepts($0.domain) } }
     public func entity(for binding: HABinding) -> HAEntity? { entities.first { $0.id == binding.entityID } }
+    /// The power sensor a switch key reads: the one chosen in settings, else the one on the switch's own device.
+    public func meter(for binding: HABinding) -> HAEntity? {
+        guard binding.action.showsMeter, binding.entityID.hasPrefix("switch.") else { return nil }
+        if let chosen = binding.meterEntityID { return chosen.isEmpty ? nil : entities.first { $0.id == chosen } }
+        return deviceMeter(for: binding.entityID)
+    }
+    public func deviceMeter(for entityID: String) -> HAEntity? {
+        guard let device = devices[entityID] else { return nil }
+        return entities.filter { $0.isPowerSensor && devices[$0.id] == device }.min { $0.id < $1.id }
+    }
+    public var meterChoices: [HAEntity] { entities.filter(\.isPowerSensor) }
     public func openDashboard() {
         if let endpoint = try? HAEndpoint(address) { NSWorkspace.shared.open(endpoint.base) }
     }
@@ -105,7 +118,7 @@ public final class HAClient {
         authenticated = false
         let waiting = pending.values; pending.removeAll()
         for item in waiting { item.timeout.cancel(); item.continuation.resume(throwing: HAFailure.disconnected) }
-        entities = []; services = [:]; changes = [:]
+        entities = []; devices = [:]; services = [:]; changes = [:]
         busySlot = nil; successSlot = nil; lastActionSlot = nil
     }
     private func runSession() async -> Bool {
@@ -118,6 +131,8 @@ public final class HAClient {
         } catch { connection = .offline(error.localizedDescription); onChange?(); return false }
         let stamp = UUID(); generation = stamp
         let ws = URLSession.shared.webSocketTask(with: endpoint.websocket)
+        // HA snapshots of a large home exceed the 1 MB default.
+        ws.maximumMessageSize = 16 << 20
         socket = ws; ws.resume()
         connection = .connecting; errorMessage = nil; onChange?()
         var retry = true
@@ -176,7 +191,10 @@ public final class HAClient {
             _ = try await request(["type": .string("subscribe_events"), "event_type": .string("state_changed")])
             let states = try await request(["type": .string("get_states")])
             let supported = try await request(["type": .string("get_services")])
+            // Optional: without it, power sensors are only matched when chosen in settings.
+            let registry = try? await request(["type": .string("config/entity_registry/list_for_display")])
             guard generation == stamp, !Task.isCancelled else { return }
+            devices = Self.devices(in: registry)
             entities = (states.array ?? []).compactMap(HAEntity.init)
             services = supported.object ?? [:]
             for (id, value) in changes { apply(id: id, value: value) }
@@ -200,6 +218,15 @@ public final class HAClient {
             errorMessage = error.localizedDescription
             socket?.cancel(with: .goingAway, reason: nil)
         }
+    }
+    /// Entity → device from `list_for_display` (`ei` / `di`) or the full registry list.
+    static func devices(in registry: HAValue?) -> [String: String] {
+        let rows = registry?.object?["entities"]?.array ?? registry?.array ?? []
+        var result: [String: String] = [:]
+        for row in rows.compactMap(\.object) {
+            if let id = (row["ei"] ?? row["entity_id"])?.string, let device = (row["di"] ?? row["device_id"])?.string { result[id] = device }
+        }
+        return result
     }
     private func apply(id: String, value: HAValue) {
         entities.removeAll { $0.id == id }

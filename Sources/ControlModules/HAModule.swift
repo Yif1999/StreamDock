@@ -51,9 +51,12 @@ public final class HAModule: DockModule {
         if client.busySlot == slot { caption = "…" }
         else if client.lastActionSlot == slot, client.errorMessage != nil { caption = "Failed" }
         else if client.successSlot == slot, [.scene, .script].contains(binding.action) { caption = "Sent" }
+        // A switch that is on shows its power reading in place of its icon.
+        let reading = entity?.state == "on" ? client.meter(for: binding)?.powerText : nil
         func key(symbol: String? = nil, value: String? = nil, active: Bool = false) -> KeyFace {
             KeyFace(symbol: symbol, title: value, caption: caption, tone: !available ? .dim : active ? .on : .normal)
         }
+        if let reading { return key(value: reading, active: true) }
         switch binding.action {
         case .status:
             return key(value: String((entity?.keyState ?? "Offline").prefix(7)))

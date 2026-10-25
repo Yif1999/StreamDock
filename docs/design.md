@@ -58,7 +58,9 @@ StreamDock 的视觉与交互规范：控台按键、灯光、桌面界面。新
 - **标签用英文**：11 px 的中文笔画会糊在一起，英文清晰。
 - 用短词，首字母大写，尽量不超过 10 个字符：`Volume` `Brightness` `Sleep` `Mic` `Muted` `Loved` `Record` `Recording` `Pause` `Resume` `Stream` `Live` `Studio` `Transition` `Replay` `Save` `Saved` `Camera`。
 - 通用状态词：`On` / `Off` / `Offline` / `Unknown` / `Unset` / `Failed` / `Retry` / `Hold` / `…`（处理中）。
-- 数值不带单位符号时由标签说明含义（`45` + `Volume`）；温度、百分比保留符号（`26°`、`40%`）。
+- 数值不带单位符号时由标签说明含义（`45` + `Volume`）；温度、百分比、功率保留符号（`26°`、`40%`、`86W`）。
+- 功率：1000 W 以下取整瓦（`86W`），以上用 kW 保留一位小数（`1.5kW`）。
+- 带功率计量的开关开启时，用读数代替图标（`on` 状态不变）；关闭或读数不可用时显示图标。
 - 用户自己起的名字（HA 实体名、OBS 场景 / 来源名）原样显示，可能是中文；可在设置里改成英文。
 - 错误详情放在设置窗口，按键上只显示 `Failed`。
 

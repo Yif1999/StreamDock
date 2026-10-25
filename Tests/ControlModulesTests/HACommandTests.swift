@@ -9,6 +9,18 @@ struct HACommandTests {
         let names = ["turn_on", "turn_off", "toggle", "set_temperature", "set_hvac_mode", "set_percentage", "oscillate", "set_preset_mode"]
         return HACommand.make(action: action, entity: entity, services: [entity.domain: .object(Dictionary(uniqueKeysWithValues: names.map { ($0, .object([:])) }))])
     }
+    @Test func powerReadingsAreWholeWattsThenKilowatts() {
+        func reading(_ state: String, _ unit: String) -> String? {
+            entity("sensor", state: state, ["unit_of_measurement": .string(unit), "device_class": .string("power")]).powerText
+        }
+        #expect(reading("86.4", "W") == "86W")
+        #expect(reading("999.6", "W") == "1.0kW")
+        #expect(reading("1.46", "kW") == "1.5kW")
+        #expect(reading("-0.2", "W") == "0W")
+        #expect(reading("unavailable", "W") == nil)
+        #expect(reading("3", "kWh") == nil) // Energy, not power.
+        #expect(entity("sensor", state: "86.4", ["unit_of_measurement": .string("W")]).keyState == "86W")
+    }
     @Test func climateTemperatureHonorsStepLimitsAndPowerState() {
         let attrs: HAData = ["temperature": .number(29.5), "min_temp": .number(16), "max_temp": .number(30), "target_temp_step": .number(0.5), "supported_features": .number(425), "hvac_modes": .array([.string("off"), .string("cool"), .string("heat")])]
         let climate = entity("climate", state: "cool", attrs)

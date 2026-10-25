@@ -42,7 +42,7 @@ struct HASettingsSection: View {
                 ForEach(HAAction.allCases) { action in Text(action.title).tag(action) }
             }
             if client.bindings[slot].action == .safePower {
-                Text("通电时需持续按住 1 秒才断电，松手、翻页或断线即取消；断电时短按恢复供电。")
+                Text("通电时需持续按住 1 秒才断电，松手、翻页或断线即取消；断电时短按恢复供电。通电时按键显示实时功率。")
                     .font(.caption).foregroundStyle(.secondary)
             }
             if client.bindings[slot].action != .none {
@@ -51,6 +51,9 @@ struct HASettingsSection: View {
                 TextField("按键名称", text: field(\.label), prompt: Text("默认使用设备名称"))
                 if let entity = client.entity(for: client.bindings[slot]) {
                     LabeledContent("当前状态", value: entity.displayState)
+                }
+                if client.bindings[slot].action.showsMeter, client.bindings[slot].entityID.hasPrefix("switch.") {
+                    meterPicker
                 }
             }
         } header: { Text("第 2 页按键 · 第 \(slot / 5 + 1) 排，第 \(slot % 5 + 1) 列") }
@@ -87,12 +90,29 @@ struct HASettingsSection: View {
         let choices = client.choices(for: binding.action).filter {
             search.isEmpty || $0.name.localizedCaseInsensitiveContains(search) || $0.id.localizedCaseInsensitiveContains(search)
         }
-        return Picker("设备或实体", selection: field(\.entityID)) {
+        // A new device starts with its own power sensor again.
+        let entity = Binding(get: { binding.entityID }, set: { id in
+            client.setBinding(HABinding(action: binding.action, entityID: id, label: binding.label), at: slot)
+        })
+        return Picker("设备或实体", selection: entity) {
             Text("请选择").tag("")
             if !binding.entityID.isEmpty && !choices.contains(where: { $0.id == binding.entityID }) {
                 Text(client.entity(for: binding)?.name ?? "\(binding.entityID)（离线）").tag(binding.entityID)
             }
             ForEach(choices) { entity in Text("\(entity.name) · \(entity.id)").tag(entity.id) }
+        }
+    }
+    private var meterPicker: some View {
+        let binding = client.bindings[slot]
+        let own = client.deviceMeter(for: binding.entityID)
+        let selection = Binding<String?>(get: { client.bindings[slot].meterEntityID }, set: { id in
+            var binding = client.bindings[slot]; binding.meterEntityID = id
+            client.setBinding(binding, at: slot)
+        })
+        return Picker("功率读数", selection: selection) {
+            Text(own.map { "自动 · \($0.name)" } ?? "自动（未找到同设备的功率传感器）").tag(String?.none)
+            Text("不显示").tag(String?.some(""))
+            ForEach(client.meterChoices) { sensor in Text("\(sensor.name) · \(sensor.id)").tag(String?.some(sensor.id)) }
         }
     }
     private func field(_ key: WritableKeyPath<HABinding, String>) -> Binding<String> {

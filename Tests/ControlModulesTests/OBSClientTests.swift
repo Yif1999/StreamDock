@@ -10,9 +10,8 @@ struct OBSClientTests {
     }
 
     @Test func bindingsPersistWithoutCredentials() throws {
-        let suite = "StreamDock.Tests.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let (defaults, cleanup) = temporaryDefaults()
+        defer { cleanup() }
         let client = OBSClient(defaults: defaults)
         var binding = OBSBinding(action: .scene); binding.target = "Desktop"
         client.setBinding(binding, at: 8)
@@ -23,9 +22,8 @@ struct OBSClientTests {
     }
 
     @Test func disconnectedControlsAreCenteredInMiddleRow() throws {
-        let suite = "StreamDock.Tests.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let (defaults, cleanup) = temporaryDefaults()
+        defer { cleanup() }
         let module = OBSModule(client: OBSClient(defaults: defaults))
         let occupied = (0..<15).filter { module.face(forSlot: $0) != .blank }
         #expect(occupied == [6, 7, 8])
@@ -38,9 +36,8 @@ struct OBSClientTests {
         let fixture = try Fixture()
         defer { fixture.stop() }
         let port = fixture.port
-        let suite = "StreamDock.Tests.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let (defaults, cleanup) = temporaryDefaults()
+        defer { cleanup() }
         let client = OBSClient(defaults: defaults, configuration: {
             OBSLocalConfiguration(server_enabled: true, server_port: port, auth_required: true, server_password: "fixture-password")
         })
@@ -120,9 +117,8 @@ struct OBSClientTests {
     @Test func staleResponseNeverOverwritesANewerEvent() async throws {
         let fixture = try Fixture(arguments: ["--stale-record"])
         defer { fixture.stop() }
-        let suite = "StreamDock.Tests.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let (defaults, cleanup) = temporaryDefaults()
+        defer { cleanup() }
         let port = fixture.port
         let client = OBSClient(defaults: defaults, configuration: {
             OBSLocalConfiguration(server_enabled: true, server_port: port, auth_required: true, server_password: "fixture-password")

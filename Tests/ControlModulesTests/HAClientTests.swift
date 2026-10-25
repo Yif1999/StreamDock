@@ -18,9 +18,8 @@ private final class MemoryHATokens: HATokenStore {
         }
     }
     @Test func configurationPersistsBindingsButKeepsTokensOutOfDefaults() throws {
-        let suite = "StreamDock.HATests.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let (defaults, cleanup) = temporaryDefaults()
+        defer { cleanup() }
         let tokens = MemoryHATokens()
         let client = HAClient(defaults: defaults, tokens: tokens)
         defer { client.disconnect() }
@@ -30,16 +29,15 @@ private final class MemoryHATokens: HATokenStore {
         client.setBinding(binding, at: 3)
         let restored = HAClient(defaults: defaults, tokens: tokens)
         #expect(restored.bindings[3] == binding)
-        #expect(!defaults.persistentDomain(forName: suite)!.description.contains("test-secret"))
+        #expect(!defaults.dictionaryRepresentation().description.contains("test-secret"))
         #expect(!client.configure(address: "http://127.0.0.1:2", token: ""))
         #expect(client.address == "http://127.0.0.1:1")
         client.removeToken()
         #expect(tokens.values.isEmpty)
     }
     @Test func offlineControlsAreHorizontalAndCentered() throws {
-        let suite = "StreamDock.HATests.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let (defaults, cleanup) = temporaryDefaults()
+        defer { cleanup() }
         let module = HAModule(client: HAClient(defaults: defaults, tokens: MemoryHATokens()))
         #expect((0..<15).filter { module.face(forSlot: $0) != .blank } == [6, 7, 8])
     }
@@ -55,9 +53,8 @@ private final class MemoryHATokens: HATokenStore {
             if byte == Data([10]) { break }; line.append(byte)
         }
         let port = try #require(Int(String(decoding: line, as: UTF8.self)))
-        let suite = "StreamDock.HATests.\(UUID())"
-        let defaults = try #require(UserDefaults(suiteName: suite))
-        defer { defaults.removePersistentDomain(forName: suite) }
+        let (defaults, cleanup) = temporaryDefaults()
+        defer { cleanup() }
         // Short timeout and hold so the test does not wait out the real ones (6 s, 1 s).
         let client = HAClient(defaults: defaults, tokens: MemoryHATokens(), requestTimeout: .milliseconds(500))
         defer { client.disconnect() }
@@ -73,6 +70,15 @@ private final class MemoryHATokens: HATokenStore {
         client.setBinding(HABinding(action: .toggle, entityID: "light.desk"), at: 0)
         let module = HAModule(client: client, hold: .milliseconds(150))
         #expect(module.face(forSlot: 0).symbol == "power" && module.face(forSlot: 0).title == nil)
+        // A switch reads the power sensor on its own device, or the one chosen in settings.
+        #expect(client.devices["sensor.plug_power"] == "plug")
+        client.setBinding(HABinding(action: .safePower, entityID: "switch.plug"), at: 4)
+        #expect(module.face(forSlot: 4).title == "86W" && module.face(forSlot: 4).tone == .on)
+        client.setBinding(HABinding(action: .toggle, entityID: "switch.plug", meterEntityID: "sensor.heater_power"), at: 4)
+        #expect(module.face(forSlot: 4).title == "1.5kW")
+        client.setBinding(HABinding(action: .safePower, entityID: "switch.plug", meterEntityID: ""), at: 4)
+        #expect(module.face(forSlot: 4).symbol == "powerplug.fill" && module.face(forSlot: 4).title == nil)
+        client.setBinding(HABinding(), at: 4)
         module.keyDown(slot: 0)
         try await wait { client.busySlot == nil && client.entities.first { $0.id == "light.desk" }?.state == "on" }
         #expect(module.face(forSlot: 0).title == "50%")
@@ -100,9 +106,12 @@ private final class MemoryHATokens: HATokenStore {
         module.keyDown(slot: 3); module.sceneDidDeactivate()
         try await Task.sleep(for: .milliseconds(250))
         #expect(client.entities.first { $0.id == "switch.plug" }?.state == "on")
+        #expect(module.face(forSlot: 3).title == "86W")
         module.keyDown(slot: 3)
+        #expect(module.face(forSlot: 3).caption == "Hold")
         try await wait { client.entities.first { $0.id == "switch.plug" }?.state == "off" && client.busySlot == nil }
         module.keyUp(slot: 3)
+        #expect(module.face(forSlot: 3).symbol == "power" && module.face(forSlot: 3).title == nil) // Off: no reading.
         client.setBinding(HABinding(action: .script, entityID: "script.timeout"), at: 3)
         client.perform(slot: 3)
         try await wait { client.busySlot == nil && client.errorMessage?.contains("超时") == true }

@@ -47,7 +47,12 @@ states = {
     'light.offline': entity('light.offline', 'unavailable'),
     'input_boolean.race': entity('input_boolean.race', 'off'),
     'sensor.calls': entity('sensor.calls', '0'),
+    'sensor.plug_power': entity('sensor.plug_power', '86.4', unit_of_measurement='W', device_class='power'),
+    'sensor.heater_power': entity('sensor.heater_power', '1.46', unit_of_measurement='kW', device_class='power'),
 }
+# Entity registry as `list_for_display` returns it: entity id -> device id.
+registry = {'entities': [{'ei': 'switch.plug', 'di': 'plug'}, {'ei': 'sensor.plug_power', 'di': 'plug'},
+                         {'ei': 'sensor.heater_power', 'di': 'heater'}]}
 services = {
     'light': {'toggle': {}, 'turn_on': {}, 'turn_off': {}},
     'switch': {'toggle': {}, 'turn_on': {}, 'turn_off': {}},
@@ -84,6 +89,7 @@ while True:
                 changed('input_boolean.race')
                 continue
             elif kind == 'get_services': result = services
+            elif kind == 'config/entity_registry/list_for_display': result = registry
             elif kind == 'ping':
                 send(c, {'id': id, 'type': 'pong'})
                 continue
