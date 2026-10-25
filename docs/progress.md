@@ -100,7 +100,7 @@
   - Codex：`https://chatgpt.com/backend-api/wham/usage`（`rate_limit` 的两个窗口按 `limit_window_seconds` 区分 5h / 周、`credits.balance`、`rate_limit_reset_credits.available_count`）。
   - 这两个上游接口没有公开文档，字段以 2026-10-25 的实测为准（`dock-probe cpa`）。
 - 安全：管理密钥只存钥匙串、只走 HTTPS（本机地址除外）；只发上述查询，不调用消耗重置卡、删除或上传凭据的接口（有测试约束）。
-- 上游没有推送，只在 VibeCoding 场景显示时每 5 分钟查询一次，切走即停，不在后台刷新；切入场景时立即查询一次；按某一排的额度键只刷新这一排的服务，在设置里点"立即刷新"刷新两者。查询失败时保留上一次读数，设置窗口显示原因。
+- 上游没有推送，只在 VibeCoding 场景显示时查询，切走即停，不在后台刷新。每个服务的读数缓存 5 分钟（从上次查询算起，失败也算）：切入场景时只查询已过期的服务，5 分钟内反复切换只用缓存、不发请求；停留在场景里则在到期时自动再查。人为刷新不看缓存：按某一排的额度键只刷新这一排的服务，在设置里点"立即刷新"刷新两者，改地址或换账号也会立即查询。查询失败时保留上一次读数，设置窗口显示原因。
 - 按键：Codex 排 打开 | 5h | Week | Resets | Credits；Claude 排 打开 | 5h | Week | 5h 重置倒计时 | 周重置倒计时（Claude 没有重置卡，超额用量未开启）。额度键按剩余比例用服务色填充，规则见 [design.md](design.md)"额度键"。
 - CPA 中有 1 个 Claude、2 个 Codex 账号；Codex 排用 Plus 账号（与本机 Codex 同一账号），在设置的 VibeCoding 页可改。
 - 第 3 排：Accept | Stop | New | Send | Voice，只对前台的 Codex（ChatGPT.app，`com.openai.codex`）或 Claude 桌面应用（`com.anthropic.claudefordesktop`）生效，前台是其他应用时变暗、不发送。快捷键取自两个应用包内（2026-10-25）：Codex 命令表 Approve request = Enter、Decline request = Escape、新对话 ⌘⇧O；Claude 菜单 New = ⌘N；Send 两边都是 Enter；Accept 在 Codex 是 Enter，在 Claude 是 ⌘↩（Claude 的权限提示上标的就是 ⌘↩，单按 Enter 无效，2026-10-25 实测）。Voice 按住期间保持 Fn 按下，交给用户的输入法（微信输入法）语音识别。需要「辅助功能」权限（设置的权限一节）。2026-10-25 实测：两个应用里前台判断、New、Send、Stop（Esc 能打断生成）、Voice（合成的 Fn 能触发微信输入法）均正常；Accept 在 Claude（⌘↩）和 Codex（Enter）里都能批准。Codex 的 Esc 要按两次才停止（第一次只是准备停止，按钮变成 ESC 提示，这是它防误触的设计），所以控台的 Stop 在 Codex 正在工作（灯带巡航）时连发两次 Esc（间隔 0.15 秒），按一下就停；Codex 在等批准时只发一次，即拒绝这个请求，不能再跟第二个；Codex 空闲或前台是 Claude 时也只发一次。是否在工作取自灯带提醒的状态。

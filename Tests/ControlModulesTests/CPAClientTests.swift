@@ -87,7 +87,7 @@ private final class FakeCPA: @unchecked Sendable {
         #expect(client.quotas[.codex]?.resetCredits == 2) // The last good reading stays on the keys.
     }
 
-    @Test func aRowRefreshesOnlyItsServiceAndTheSceneQueriesOnEntry() async throws {
+    @Test func aRowRefreshesOnlyItsServiceAndTheSceneUsesAFiveMinuteCache() async throws {
         let (defaults, cleanup) = temporaryDefaults()
         defer { cleanup() }
         let fake = FakeCPA()
@@ -95,20 +95,38 @@ private final class FakeCPA: @unchecked Sendable {
         let secrets = MemorySecrets()
         secrets.values["https://cpa.example.com"] = "k"
         defaults.set("https://cpa.example.com", forKey: "cpaAddress")
-        let client = CPAClient(defaults: defaults, secrets: secrets, interval: .seconds(3600), send: { fake.send($0) })
-        await client.refresh([.claude])
+        let client = CPAClient(defaults: defaults, secrets: secrets, send: { fake.send($0) })
+        var now = ContinuousClock.now
+        client.clock = { now }
         let upstream = { fake.requests.compactMap { request -> String? in
             guard let body = request.httpBody else { return nil }
             return (try? JSONSerialization.jsonObject(with: body) as? [String: Any])?["url"] as? String
         } }
+        let enter = { (count: Int) in
+            let module = AIQuotaModule(client: client)
+            module.sceneDidActivate()
+            let deadline = ContinuousClock.now + .seconds(5)
+            while upstream().count < count && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+            try await Task.sleep(for: .milliseconds(100))  // Nothing more comes.
+            module.sceneDidDeactivate()
+        }
+        await client.refresh([.claude])  // A Claude key press.
         #expect(upstream() == [AIService.claude.usageRequest.url])
-        // Coming on screen queries at once, then waits out the interval.
-        let module = AIQuotaModule(client: client)
-        module.sceneDidActivate()
-        let deadline = ContinuousClock.now + .seconds(5)
-        while upstream().count < 3 && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
-        module.sceneDidDeactivate()
-        #expect(upstream().count == 3 && Set(upstream()) == Set(AIService.allCases.map(\.usageRequest.url)))
+        // Coming on screen queries only what is not cached: Codex.
+        try await enter(2)
+        #expect(upstream() == [AIService.claude.usageRequest.url, AIService.codex.usageRequest.url])
+        // Back within five minutes: the cache, no queries.
+        now += .seconds(299)
+        try await enter(2)
+        #expect(upstream().count == 2)
+        // Past five minutes: both again.
+        now += .seconds(2)
+        try await enter(4)
+        #expect(upstream().count == 4)
+        // A key press always queries.
+        await client.refresh([.codex])
+        #expect(upstream().count == 5)
+        #expect(await client.refreshStale() == .seconds(300))  // Both fresh: the next round is a full interval away.
     }
 
     @Test func keysShowWhatIsLeftOverAFillInTheServiceColor() async throws {

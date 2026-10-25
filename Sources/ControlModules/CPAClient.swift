@@ -3,7 +3,10 @@ import Observation
 
 /// Reads the Codex and Claude quotas through CPA's management API: the account list, then one
 /// `api-call` GET per service, made by CPA with that account's credential (which never leaves
-/// the server). Upstream quotas have no push, so this polls every 5 minutes, only while the VibeCoding scene is on screen.
+/// the server). Upstream quotas have no push, so this polls, only while the VibeCoding scene is
+/// on screen. A reading is good for `interval` (5 minutes): coming back to the scene within it
+/// shows the cached one and queries nothing; only a deliberate refresh (a quota key, Settings,
+/// a new address or account) queries before it runs out.
 @MainActor @Observable
 public final class CPAClient {
     public static let shared = CPAClient()
@@ -35,6 +38,10 @@ public final class CPAClient {
     /// Services with a query on the way; a second request for one of them is dropped.
     @ObservationIgnored private var inFlight: Set<AIService> = []
     @ObservationIgnored private var generation = UUID()
+    /// When each service was last queried; its reading counts as fresh for `interval` after.
+    @ObservationIgnored private var queried: [AIService: ContinuousClock.Instant] = [:]
+    /// The clock the cache reads; tests move it on.
+    @ObservationIgnored var clock: () -> ContinuousClock.Instant = { ContinuousClock.now }
 
     init(defaults: UserDefaults = .standard, secrets: any SecretStore = Keychain.cpa, interval: Duration = .seconds(300),
          send: @escaping @Sendable (URLRequest) async throws -> (Data, Int) = CPAClient.urlSession) {
@@ -83,24 +90,34 @@ public final class CPAClient {
         return candidates.filter(\.active).min { $0.id < $1.id }
     }
 
-    /// Polls until `stop()`, starting with a query at once: the VibeCoding scene calls these as
-    /// it comes on and off screen.
+    /// Polls until `stop()`: the VibeCoding scene calls these as it comes on and off screen. Each
+    /// round queries only the services whose reading has run out, then sleeps until the next one does.
     public func start() {
         guard poll == nil else { return }
-        poll = Task { [weak self, interval] in
+        poll = Task { [weak self] in
             while !Task.isCancelled {
-                await self?.refresh()
-                do { try await Task.sleep(for: interval) } catch { return }
+                guard let wait = await self?.refreshStale() else { return }
+                do { try await Task.sleep(for: wait) } catch { return }
             }
         }
     }
     public func stop() { poll?.cancel(); poll = nil }
-    /// Queries the given services now (a row's key refreshes only its own service).
+    /// Queries the given services now, cached or not (a row's key refreshes only its own service).
     public func refreshNow(_ services: Set<AIService> = Set(AIService.allCases)) { Task { await refresh(services) } }
+
+    /// Queries the services not queried within `interval`; returns how long until the next one is due.
+    func refreshStale() async -> Duration {
+        let now = clock()
+        let stale = AIService.allCases.filter { queried[$0].map { now - $0 >= interval } ?? true }
+        if !stale.isEmpty { await refresh(Set(stale)) }
+        let later = clock()
+        let next = AIService.allCases.map { queried[$0].map { $0 + interval - later } ?? interval }.min() ?? interval
+        return max(next, .zero)
+    }
 
     private func reset() {
         generation = UUID()
-        accounts = []; quotas = [:]; errors = [:]
+        accounts = []; quotas = [:]; errors = [:]; queried = [:]
     }
 
     func refresh(_ services: Set<AIService> = Set(AIService.allCases)) async {
@@ -112,6 +129,8 @@ public final class CPAClient {
         inFlight.formUnion(wanted)
         defer { inFlight.subtract(wanted) }
         let stamp = generation
+        // A failed query counts too: it is tried again when the interval runs out, or on a key press.
+        for service in wanted { queried[service] = clock() }
         if quotas.isEmpty { status = .loading; onChange?() }
         do {
             let list = try await management(endpoint.authFiles, key: key)
