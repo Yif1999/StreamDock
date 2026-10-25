@@ -49,6 +49,8 @@ struct HASettingsSection: View {
                 TextField("搜索设备", text: $search, prompt: Text("名称或实体 ID"))
                 entityPicker
                 TextField("按键名称", text: field(\.label), prompt: Text("默认使用设备名称"))
+                Text("按键上建议用英文短名（如 A/C、Fan、PC），中文在 11 px 下笔画会糊；留空则用设备名称。")
+                    .font(.caption).foregroundStyle(.secondary)
                 if let entity = client.entity(for: client.bindings[slot]) {
                     LabeledContent("当前状态", value: entity.displayState)
                 }
