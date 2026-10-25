@@ -1,6 +1,7 @@
 import Foundation
 
-/// Persistent, scene-independent activities. Alerts still take precedence.
+/// A scene's persistent activities (e.g. OBS recording), above its own animation and color.
+/// Alerts still take precedence.
 @MainActor
 public final class LightActivityCenter {
     private struct Entry { let priority: Int; let animation: LightAnimation }

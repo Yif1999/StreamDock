@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import DockCore
 
@@ -18,11 +19,34 @@ struct PagingTests {
         func keyDown(slot: Int) { presses += 1 }
     }
     final class Host: SceneHost {
-        var alerts = AlertCenter()
         var drawn: [Int] = []
         var lightUpdates = 0
+        var litScenes: [String] = []
         func redraw(keys: [Int]) { drawn += keys }
-        func lightDidChange(in scene: DockScene) { lightUpdates += 1 }
+        func lightDidChange(in scene: DockScene, fade: TimeInterval) { lightUpdates += 1; litScenes.append(scene.id) }
+    }
+
+    final class Steady: LightAnimation {
+        func pixels(at time: TimeInterval, ledCount: Int) -> [LightPixel] { [] }
+    }
+
+    @Test func activitiesAndAlertsBelongToTheirScene() {
+        let general = DockScene(id: "general", name: "General", defaultLEDColor: .white)
+        let vibe = DockScene(id: "vibe", name: "Vibe", defaultLEDColor: .white)
+        let host = Host()
+        general.host = host; vibe.host = host
+        let recording = Steady()
+        general.activities.set(recording, for: "obs")
+        // Only the owning scene reports it; another scene's strip stays its own.
+        #expect(host.litScenes == ["general"])
+        guard case .animation(let shown) = general.activities.source(alert: general.alerts.color, sceneAnimation: nil, sceneColor: .white) else {
+            Issue.record("general should show its activity"); return
+        }
+        #expect(shown === recording)
+        guard case .solid(let color, _) = vibe.activities.source(alert: vibe.alerts.color, sceneAnimation: nil, sceneColor: .black) else {
+            Issue.record("vibe should show its own color"); return
+        }
+        #expect(color == .black)
     }
 
     @Test func pagesReuseKeysButOnlyForegroundReceivesInputAndRedraws() {

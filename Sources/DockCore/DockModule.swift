@@ -54,8 +54,9 @@ public final class ModuleContext {
         scene?.setLight(animation, page: page)
     }
 
-    /// Global alerts work from any scene, active or not.
-    public var alerts: AlertCenter? { scene?.host?.alerts }
+    /// The scene's alerts: a module may flash from the background, but the strip shows it
+    /// only while its scene is on screen.
+    public var alerts: AlertCenter? { scene?.alerts }
 }
 
 /// A key that only shows something.

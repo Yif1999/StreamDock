@@ -27,7 +27,9 @@ struct StreamDockApp: App {
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    let controller = DockController(scenes: [makeGeneralScene(), makeVibeCodingScene(), makeSynthScene()])
+    /// OBS lives in general controls, so its status light belongs to that scene.
+    private let general = makeGeneralScene()
+    lazy var controller = DockController(scenes: [general, makeVibeCodingScene(), makeSynthScene()])
     private var activity: NSObjectProtocol?
     private var displayPower: DisplayPowerMonitor?
     private var obsLights: OBSLightMonitor?
@@ -52,7 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         controller.requestDisplayWake = { [weak self] in self?.displayPower?.requestWake() }
         displayPower?.start()
         controller.start()
-        obsLights = OBSLightMonitor(center: controller.activities)
+        obsLights = OBSLightMonitor(center: general.activities)
         obsLights?.start()
     }
 

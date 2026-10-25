@@ -26,8 +26,6 @@ public final class DockController {
     @ObservationIgnored public var requestDisplayWake: (() -> Void)?
     @ObservationIgnored private var wakeGate = WakeKeyGate()
     public let settings: DockSettings
-    @ObservationIgnored public let alerts = AlertCenter()
-    @ObservationIgnored public let activities = LightActivityCenter()
 
     @ObservationIgnored private var device: M18Device?
     @ObservationIgnored private let light = LightEngine()
@@ -56,10 +54,8 @@ public final class DockController {
             device.setLEDBrightness(percent)
         }
         light.setBrightness(settings.ledBrightness)
-        activities.onChange = { [weak self] in self?.updateLight(fade: 0.6) }
         light.sendSolid = { [weak self] color in self?.device?.setLEDColor(red: color.red, green: color.green, blue: color.blue) }
         light.sendFrame = { [weak self] frame in self?.device?.setLEDFrame(frame.map { ($0.red, $0.green, $0.blue) }) }
-        alerts.onChange = { [weak self] in self?.updateLight(fade: self?.alerts.color == nil ? 0.6 : 0.18) }
     }
 
     public func start() {
@@ -80,7 +76,7 @@ public final class DockController {
 
     /// Restores the light strip, tells the device we are leaving and releases it.
     public func shutdown() {
-        alerts.cancel()
+        for scene in scenes { scene.alerts.cancel() }
         light.stop()
         reconcileTask?.cancel()
         monitor.stop()
@@ -279,10 +275,12 @@ public final class DockController {
 
     // MARK: - Drawing
 
-    /// Notification > global activity (OBS) > foreground music > idle scene color.
+    /// Only the scene on screen lights the strip: its alert > its activity (OBS) > its page's
+    /// animation (music) > its color.
     private func updateLight(fade: TimeInterval) {
-        light.show(activities.source(alert: alerts.color, sceneAnimation: activeScene.light,
-                                     sceneColor: ledColor(for: activeScene)), fade: fade)
+        let scene = activeScene
+        light.show(scene.activities.source(alert: scene.alerts.color, sceneAnimation: scene.light,
+                                           sceneColor: ledColor(for: scene)), fade: fade)
     }
 
     private func redrawAll() {
@@ -291,8 +289,8 @@ public final class DockController {
 }
 
 extension DockController: SceneHost {
-    func lightDidChange(in scene: DockScene) {
-        if scene === activeScene { updateLight(fade: 1.5) }
+    func lightDidChange(in scene: DockScene, fade: TimeInterval) {
+        if scene === activeScene { updateLight(fade: fade) }
     }
 
     func redraw(keys: [Int]) {

@@ -1,6 +1,6 @@
-/// Global, scene-independent signals on the light strip (e.g. "a coding task finished").
-/// An alert takes over the strip from any scene or animation; when it ends, whatever
-/// was showing fades back in. Each on/off of a flash is eased by the light engine.
+/// A scene's signals on the light strip (e.g. "a coding task finished"). While its scene is on
+/// screen an alert takes over the strip from the scene's animation and color; when it ends,
+/// whatever was showing fades back in. Each on/off of a flash is eased by the light engine.
 @MainActor
 public final class AlertCenter {
     var onChange: (() -> Void)?

@@ -1,9 +1,9 @@
+import Foundation
 /// What a scene needs from the core. Implemented by `DockController`.
 @MainActor
 protocol SceneHost: AnyObject {
-    var alerts: AlertCenter { get }
     func redraw(keys: [Int])
-    func lightDidChange(in scene: DockScene)
+    func lightDidChange(in scene: DockScene, fade: TimeInterval)
 }
 
 /// One full-screen layout bound to a round key. Scenes never see each other:
@@ -21,6 +21,10 @@ open class DockScene {
     weak var host: SceneHost?
     /// Set by a module; shown instead of `defaultLEDColor` while the scene is active.
     var light: LightAnimation? { pageLights[currentPageIndex] }
+    /// The scene's own persistent states (e.g. OBS recording) and alerts. Like everything a
+    /// scene shows, they reach the light strip only while the scene is on screen.
+    public let activities = LightActivityCenter()
+    public let alerts = AlertCenter()
     private var pageLights: [Int: LightAnimation] = [:]
 
     private var placements: [(module: DockModule, keys: [Int], page: Int)] = []
@@ -32,6 +36,8 @@ open class DockScene {
         self.id = id
         self.name = name
         self.defaultLEDColor = defaultLEDColor
+        activities.onChange = { [unowned self] in host?.lightDidChange(in: self, fade: 0.6) }
+        alerts.onChange = { [unowned self] in host?.lightDidChange(in: self, fade: alerts.color == nil ? 0.6 : 0.18) }
     }
 
     /// Places a module on LCD keys (1–15, row by row from the top-left), one key per slot.
@@ -69,7 +75,7 @@ open class DockScene {
     func setLight(_ animation: LightAnimation?, page: Int) {
         guard animation !== pageLights[page] else { return }
         pageLights[page] = animation
-        if page == currentPageIndex { host?.lightDidChange(in: self) }
+        if page == currentPageIndex { host?.lightDidChange(in: self, fade: 1.5) }
     }
 
     func advancePage() {

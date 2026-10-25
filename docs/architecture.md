@@ -9,7 +9,7 @@
    由 App 启动并随 App 退出；外部钩子（如 Claude Code hooks）只发消息，App 不在就丢弃，绝不拉起 App。
 2. **退出时清理设备**：正常显示时灯条恢复默认效果、清空按键并通知断开；屏幕已休眠时保持设备熄灭，只释放连接。
 3. **场景隔离**。三个场景各是一个独立的 SwiftPM target，只依赖 `DockCore`（和共享模块），
-   彼此不可见。非前台场景可以继续工作，但不能画按键；全局通知和活动指示通过灯光仲裁统一输出。
+   彼此不可见。非前台场景可以继续工作，但不能画按键，也不能点亮灯带：通知和活动指示都属于各自场景，只在该场景显示时输出。
 4. **环境不影响全局**。依赖都在项目内（`.build/`、`.venv/`），不装全局工具。
 
 ## 硬件：M18
@@ -33,7 +33,7 @@ SceneGeneral     通用控制场景      ┐
 SceneVibeCoding  VibeCoding 场景   ├ 互相独立
 SceneSynth       合成器场景        ┘
 ControlModules   可复用模块：媒体、音量、亮度、音频设备、HA、OBS
-DockCore         场景/模块协议、按键分发、渲染、灯条与全局提醒、设置
+DockCore         场景/模块协议、按键分发、渲染、灯条与场景提醒、设置
 DockKit          设备层：枚举、插拔、按键事件、刷图、灯条、心跳
 CTransport       官方闭源 libtransport.dylib 的 C 接口（ThirdParty/libtransport）
 ```
@@ -97,9 +97,9 @@ open build/StreamDock.app
 - 测试使用独立的本机 WebSocket fixture，不会控制用户真实的 OBS。
 - 参考：[多 OBS 控制器](https://key123.vip/product/20250217000167?lang=zh)、[obs-websocket 5 协议](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.md)。本项目范围为本机单个 OBS，不包括多实例同步与任意协议请求编辑器。
 
-### 全局活动灯光
+### 场景活动灯光
 
-`LightActivityCenter` 保存跨页面、跨场景的活动动画；优先级为通知 > 全局 OBS > 当前页动画 > 场景色。`OBSLightMonitor` 随应用启动，通过独立状态回调同步录制、暂停及推流状态，断线清除指示。OBS 录制纯红色、推流纯绿色、暂停橙琥珀色；同时输出时各占半圈。
+每个场景有自己的 `LightActivityCenter`（跨页面的活动动画）和 `AlertCenter`（提醒），只在该场景显示时参与灯光仲裁；场景内优先级为通知 > 活动（OBS）> 当前页动画 > 场景色。`OBSLightMonitor` 挂在通用控制场景上，随应用启动，通过独立状态回调同步录制、暂停及推流状态，断线清除指示。OBS 录制纯红色、推流纯绿色、暂停橙琥珀色；同时输出时各占半圈。
 
 `LightAnimation` 输出浮点 `LightPixel`（颜色通道比例 + 感知亮度），不在模块中做 Gamma 或量化。`isActive` 标识活动状态；音乐暂停仍在显示灯效，算活动（不再叠加 50% 的非活动调暗），暂停亮度由灯效自己决定。引擎在感知空间完成颜色渐变、用户亮度与活动倍率（活动 100% / 非活动 50%），由 DockCore 的 `LEDOutput` 将组合亮度一次性进行 Gamma 2.2 映射，再量化为 RGB，并保留暗部防抖。颜色通道比例不参与 Gamma，避免改变色相。
 
