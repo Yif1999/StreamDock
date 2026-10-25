@@ -7,7 +7,7 @@
 - 原生 Swift 菜单栏应用，最低 macOS 26；单进程，不添加登录项、launchd 或常驻助手。
 - 通用控制有三页：日常控制 → 智能家居 → 本机 OBS。重复按通用控制圆键翻页，切到其他场景后再回来保留页码。
 - 新版已构建、签名并在本机运行。HA 已认证并读取 151 个实体；本机 OBS 已认证，用户确认录制按键可用。
-- 自动测试共 73 项：RhythmKitTests 14、ControlModulesTests 42、DockCoreTests 17。网络控制测试使用本地模拟服务，长按与超时时长在测试中缩短。测试用的设置写在系统临时目录并在结束时删除，不在 `~/Library/Preferences` 留文件（2026-10-25 已清理此前残留的 119 个空设置文件）。
+- 自动测试共 78 项：RhythmKitTests 14、ControlModulesTests 46、DockCoreTests 18。网络控制测试使用本地模拟服务，长按与超时时长在测试中缩短。测试用的设置写在系统临时目录并在结束时删除，不在 `~/Library/Preferences` 留文件（2026-10-25 已清理此前残留的 119 个空设置文件）。
 - 用户设备绑定、服务器地址、音频候选设备保存在本机设置；HA 令牌和 CPA 管理密钥保存在钥匙串（共用 `Keychain`，按服务区分）。它们不随代码提交，仓库默认 HA 按键为空。
 
 ## 按键外观（2026-10-24）
@@ -28,7 +28,7 @@
 - 输入、输出在勾选且在线的候选设备中轮换，按 UID 保存选择；设置使用复选框，勾选不改变当前路由，也不表示同时播放。
 - 麦克风静音优先硬件 mute，否则保存并归零输入增益；失败时显示错误，不冒充会议软件的独立静音状态。
 - 关屏要求持续按住 1 秒；松手、翻页、切场景取消。已修复早期“松手一秒后仍关屏”的问题。
-- 媒体仅控制 Apple Music。封面沿用现有取图路径；喜爱使用 `favorited`，用曲目 persistent ID 避免切歌期间误操作。
+- 媒体仅控制 Apple Music。封面键短按在 Music 中显示当前曲目（松手时执行），按住 1 秒退出 Music（统一的边缘描线倒计时；Music 未运行时不倒计时）。封面沿用现有取图路径；喜爱使用 `favorited`，用曲目 persistent ID 避免切歌期间误操作。
 - 移除打拍按键，离线节奏分析工具保留。用户已确认第一页完成。
 
 ## 第 2 页：智能家居
@@ -91,7 +91,7 @@
 
 ## VibeCoding 场景（开发中，2026-10-25）
 
-- 场景色 `#FC8FFF`（用户在灯带上调定）。第 1、2 排完成，第 3 排（任务状态、快捷键）待做。
+- 场景色 `#FC8FFF`（用户在灯带上调定）。三排都已完成；任务状态提醒只做在灯带上（待做）。
 - **额度来源 CPA**（CLIProxyAPI，自建服务器，远程管理已开启）：两个账号的登录凭据挂在 CPA 上，本机客户端不开也能更新。流程：`GET /v0/management/auth-files` 取账号 → 每个服务一次 `POST /v0/management/api-call`，由 CPA 用该账号的令牌（`$TOKEN$`）发固定的 GET：
   - Claude：`https://api.anthropic.com/api/oauth/usage`（`five_hour` / `seven_day` 的 `utilization`、`resets_at`）；
   - Codex：`https://chatgpt.com/backend-api/wham/usage`（`rate_limit` 的两个窗口按 `limit_window_seconds` 区分 5h / 周、`credits.balance`、`rate_limit_reset_credits.available_count`）。
@@ -100,7 +100,8 @@
 - 上游没有推送，只在 VibeCoding 场景显示时每 5 分钟查询一次，切走即停，不在后台刷新；切入场景时立即查询一次；按某一排的额度键只刷新这一排的服务，在设置里点"立即刷新"刷新两者。查询失败时保留上一次读数，设置窗口显示原因。
 - 按键：Codex 排 打开 | 5h | Week | Resets | Credits；Claude 排 打开 | 5h | Week | 5h 重置倒计时 | 周重置倒计时（Claude 没有重置卡，超额用量未开启）。额度键按剩余比例用服务色填充，规则见 [design.md](design.md)"额度键"。
 - CPA 中有 1 个 Claude、2 个 Codex 账号；Codex 排用 Plus 账号（与本机 Codex 同一账号），在设置的 VibeCoding 页可改。
-- 第 3 排计划：任务状态依赖本机客户端（Claude Code hooks、Codex 会话记录），以及 Esc / Enter / Shift+Tab 快捷键。
+- 第 3 排：Accept | Stop | New | Send | Voice，只对前台的 Codex（ChatGPT.app，`com.openai.codex`）或 Claude 桌面应用（`com.anthropic.claudefordesktop`）生效，前台是其他应用时变暗、不发送。快捷键取自两个应用包内（2026-10-25）：Codex 命令表 Approve request = Enter、Decline request = Escape、新对话 ⌘⇧O；Claude 菜单 New = ⌘N；Send 两边都是 Enter（与 Accept 相同，作用取决于当时界面是审批卡片还是输入框）。Voice 按住期间保持 Fn 按下，交给用户的输入法（微信输入法）语音识别。需要「辅助功能」权限（设置的权限一节）。Claude 的 Enter / Esc、Codex 打断任务是否为 Esc、合成的 Fn 能否触发输入法，待实测。
+- 任务状态提醒计划只做在灯带上（不占按键），依赖本机客户端（Claude Code hooks、Codex 会话记录），只在 VibeCoding 场景显示。
 
 ## 已知限制与后续方向
 

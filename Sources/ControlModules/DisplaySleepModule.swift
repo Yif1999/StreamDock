@@ -6,8 +6,7 @@ import Foundation
 public final class DisplaySleepModule: DockModule {
     public let keyCount = 1
     private var context: ModuleContext?
-    private var countdown: Task<Void, Never>?
-    private(set) var remaining: Int?
+    let hold: KeyHold
     private var failed = false
     private var held = false
     private let sleepDisplay: @MainActor () async -> Bool
@@ -29,37 +28,27 @@ public final class DisplaySleepModule: DockModule {
         })
     }
 
-    /// How long the key must be held.
-    private let hold: Duration
-
-    init(hold: Duration = .seconds(1), sleepDisplay: @escaping @MainActor () async -> Bool) {
-        self.hold = hold
+    init(hold: Duration = KeyHold.duration, sleepDisplay: @escaping @MainActor () async -> Bool) {
+        self.hold = KeyHold(duration: hold)
         self.sleepDisplay = sleepDisplay
     }
 
     public func attach(_ context: ModuleContext) { self.context = context }
 
     public func face(forSlot slot: Int) -> KeyFace {
-        if let remaining {
-            return KeyFace(title: "\(remaining)", caption: "Hold", tone: .caution)
-        }
-        return KeyFace(symbol: "moon.fill", caption: failed ? "Failed" : "Sleep")
+        KeyFace(symbol: "moon.fill", caption: failed ? "Failed" : "Sleep", hold: hold.progress)
     }
 
     public func keyDown(slot: Int) {
         guard !held else { return }
         held = true
         failed = false
-        remaining = 1
-        context?.setNeedsDisplay()
-        countdown = Task { [weak self, hold] in
-            do { try await Task.sleep(for: hold) } catch { return }
-            guard let self, !Task.isCancelled, self.held else { return }
-            self.remaining = nil
-            self.context?.setNeedsDisplay()
-            self.countdown = nil
-            self.failed = !(await self.sleepDisplay())
-            self.context?.setNeedsDisplay()
+        hold.begin(redraw: { [weak self] in self?.context?.setNeedsDisplay() }) { [weak self] in
+            guard let self, self.held else { return }
+            Task {
+                self.failed = !(await self.sleepDisplay())
+                self.context?.setNeedsDisplay()
+            }
         }
     }
 
@@ -69,9 +58,6 @@ public final class DisplaySleepModule: DockModule {
 
     private func cancel() {
         held = false
-        countdown?.cancel()
-        countdown = nil
-        remaining = nil
-        context?.setNeedsDisplay()
+        if hold.cancel() { context?.setNeedsDisplay() }
     }
 }

@@ -9,6 +9,7 @@ private let log = Logger(subsystem: "StreamDock", category: "Music")
 /// module's scene is on screen; the audio tap runs only then too). Paused, the glow settles
 /// into a slow breath; only when Music stops (or quits) does the strip go back to the scene's
 /// color — after a grace period, since Music reports "stopped" for a moment between tracks.
+/// The artwork key: a tap shows the current track in Music; holding it for a second quits Music.
 @MainActor
 public final class MediaModule: DockModule {
     public let keyCount = 5
@@ -29,9 +30,22 @@ public final class MediaModule: DockModule {
     private var favoriteBusy = false
     private var favoriteFailed = false
     private var displayedTrack: AppleMusic.Track?
+    /// Holding the artwork key quits Music.
+    let quitHold: KeyHold
+    /// The artwork key went down and its tap (reveal) is still due on release.
+    private var artworkPressed = false
+    // Music's side, replaceable in tests.
+    var musicRunning: () -> Bool
+    var quitMusic: () -> Void
+    var revealTrack: () -> Void
 
-
-    public init() {}
+    public convenience init() { self.init(hold: KeyHold.duration) }
+    init(hold: Duration) {
+        quitHold = KeyHold(duration: hold)
+        musicRunning = { [music] in music.isRunning }
+        quitMusic = { [music] in music.quit() }
+        revealTrack = { [music] in music.revealCurrentTrack() }
+    }
 
     public func attach(_ context: ModuleContext) {
         self.context = context
@@ -48,7 +62,7 @@ public final class MediaModule: DockModule {
         }
         if slot == 3 {
             return KeyFace(symbol: "music.note", artwork: cover, caption: cover == nil ? "Music" : nil,
-                           tone: music.track == nil ? .dim : .normal)
+                           tone: music.track == nil ? .dim : .normal, hold: quitHold.progress)
         }
         if slot == 4 {
             guard let favorite else { return KeyFace(symbol: "star.fill", caption: "Love", tone: .dim) }
@@ -68,7 +82,15 @@ public final class MediaModule: DockModule {
         case 0: music.previous()
         case 1: music.playPause()
         case 2: music.next()
-        case 3: music.revealCurrentTrack()
+        case 3:
+            guard !artworkPressed else { return }
+            artworkPressed = true
+            guard musicRunning() else { return }
+            quitHold.begin(redraw: { [weak self] in self?.context?.setNeedsDisplay() }) { [weak self] in
+                // Held through: quit instead of the tap's reveal.
+                self?.artworkPressed = false
+                self?.quitMusic()
+            }
         case 4:
             guard let favorite, !favoriteBusy else { return }
             favoriteBusy = true
@@ -82,6 +104,17 @@ public final class MediaModule: DockModule {
             }
         default: break
         }
+    }
+
+    public func keyUp(slot: Int) {
+        guard slot == 3, artworkPressed else { return }
+        artworkPressed = false
+        cancelQuit()
+        revealTrack()
+    }
+
+    private func cancelQuit() {
+        if quitHold.cancel() { context?.setNeedsDisplay() }
     }
 
     // Keep following Music in the background so the key is right when the scene comes back.
@@ -100,6 +133,8 @@ public final class MediaModule: DockModule {
 
     public func sceneDidDeactivate() {
         visible = false
+        artworkPressed = false
+        cancelQuit()
         favoriteTask?.cancel()
         favoriteTask = nil
         stopAudio()

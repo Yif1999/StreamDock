@@ -7,6 +7,7 @@
 //   dock-probe rhythm-eval <trace>  replay a rhythm trace and score it against tapped beats
 //   dock-probe ddc             read brightness / volume from the external monitor over DDC
 //   dock-probe cpa <base-url>  read-only: CPA accounts and the Claude / Codex quota replies (key in CPA_KEY)
+//   dock-probe fpstest [rate…] [--all]  frame numbers at each rate, for a slow-motion video
 
 import AppKit
 import ImageIO
@@ -100,6 +101,91 @@ case "keysheet":
     // --pressed: every key as shown while held down.
     try writeKeySheet(to: output, artwork: art, pressed: arguments.contains("--pressed"))
     print("wrote \(output)")
+case "holdsheet":
+    // dock-probe holdsheet <out.png> [artwork]: the long-press line on the three hold keys,
+    // pressed, at 0 / ¼ / ½ / ¾ / full (3×).
+    let positional = arguments.dropFirst().filter { !$0.hasPrefix("--") }
+    let output = positional.first ?? "build/holdsheet.png"
+    let art = positional.dropFirst().first.flatMap { FileManager.default.contents(atPath: $0) }
+    let steps = [0, 0.25, 0.5, 0.75, 1.0]
+    let rows: [(Double) -> CGImage?] = [
+        { KeyDesign.image(symbol: "moon.fill", label: "Sleep", hold: $0, pressed: true) },
+        { KeyDesign.image(value: "86W", label: "PC", tone: .on, hold: $0, pressed: true) },
+        { KeyDesign.image(symbol: "music.note", label: art == nil ? "Music" : nil, artwork: art, hold: $0, pressed: true) },
+    ]
+    let zoom = 3, cell = 64 * zoom, gap = 24
+    let width = steps.count * cell + (steps.count + 1) * gap, height = rows.count * cell + (rows.count + 1) * gap
+    let sheet = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                          space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    sheet.setFillColor(CGColor(gray: 0.12, alpha: 1)); sheet.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    sheet.interpolationQuality = .none
+    for (r, render) in rows.enumerated() { for (c, step) in steps.enumerated() {
+        guard let key = render(step) else { continue }
+        sheet.draw(key, in: CGRect(x: gap + c * (cell + gap), y: height - (r + 1) * (cell + gap), width: cell, height: cell))
+    } }
+    let png = NSBitmapImageRep(cgImage: sheet.makeImage()!).representation(using: .png, properties: [:])!
+    try png.write(to: URL(fileURLWithPath: output))
+    print("wrote \(output)")
+case "fpstest":
+    // dock-probe fpstest [rate…] [--all]: frame numbers on key 1 (--all: every key) at each rate
+    // (default 24 60 114), 5 s each, after a 2 s card naming the rate. Film it in slow motion and
+    // count the numbers that appear: skipped numbers mean the screen shows fewer frames than it is
+    // sent. Each run ends on a red END card printed as sent: the device sends no replies, so if the
+    // link falls behind, the numbers keep running after "END sent" for as long as the backlog.
+    guard let identity = M18Device.attached().first else {
+        print("no M18 attached")
+        break
+    }
+    let rates = arguments.dropFirst().compactMap(Double.init).filter { $0 > 0 }
+    let side = M18Layout.keyImageSize
+    func card(_ text: String, ink: NSColor, ground: NSColor, bar: Int?) -> Data {
+        let context = CGContext(data: nil, width: side, height: side, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+        context.setFillColor(ground.cgColor); context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        // A bar that steps 4 px a frame along the top, so a torn or skipped frame shows as a jump.
+        if let bar { context.setFillColor(NSColor.systemGreen.cgColor); context.fill(CGRect(x: bar * 4, y: side - 10, width: 4, height: 10)) }
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: context, flipped: false)
+        let label = NSAttributedString(string: text, attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: text.count > 2 ? 22 : 34, weight: .bold), .foregroundColor: ink,
+        ])
+        let size = label.size()
+        label.draw(at: CGPoint(x: (CGFloat(side) - size.width) / 2, y: (CGFloat(side) - 10 - size.height) / 2))
+        NSGraphicsContext.current = nil
+        let data = NSMutableData()
+        let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil)!
+        CGImageDestinationAddImage(destination, context.makeImage()!, [kCGImageDestinationLossyCompressionQuality: 1.0] as CFDictionary)
+        CGImageDestinationFinalize(destination)
+        return data as Data
+    }
+    let numbers = (0..<100).map { card(String(format: "%02d", $0), ink: .white, ground: .black, bar: $0 % 16) }
+    let device = try M18Device(opening: identity) { _ in }
+    device.setScreenBrightness(80)
+    device.clearKeys(Array(1...15))
+    let keys = arguments.contains("--all") ? Array(1...15) : [1]
+    func all(_ image: Data) -> [Int: Data] { Dictionary(uniqueKeysWithValues: keys.map { ($0, image) }) }
+    let end = card("END", ink: .white, ground: .systemRed, bar: nil)
+    for rate in rates.isEmpty ? [24, 60, 114] : rates {
+        device.setKeyImages(all(card("\(Int(rate))/s", ink: .black, ground: .systemYellow, bar: nil)))
+        print("\(Int(rate)) frames/s on \(keys.count) key(s): card for 2 s, then 5 s of numbers 00–99")
+        Thread.sleep(forTimeInterval: 2)
+        let start = Date()
+        for frame in 0..<Int(rate * 5) {
+            let due = start.addingTimeInterval(Double(frame) / rate)
+            if due > Date() { Thread.sleep(until: due) }
+            // Each key runs a few numbers ahead of the last, so every key changes every frame.
+            device.setKeyImages(Dictionary(uniqueKeysWithValues: keys.map { ($0, numbers[(frame + $0 * 7) % numbers.count]) }))
+        }
+        device.setKeyImages(all(end))
+        // Count the seconds out loud: the second at which END shows is the backlog.
+        print("END sent; note the second at which END appears on the keys")
+        for second in 1...30 {
+            Thread.sleep(forTimeInterval: 1)
+            print("END +\(second) s")
+            // Spoken too, so the count can be followed while watching the keys.
+            _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/say"), arguments: ["\(second)"])
+        }
+    }
+    device.close(notifyDevice: true)
 case "keytest":
     // Pixel test patterns on the top row, to see whether the firmware shows 64×64 key images
     // 1:1 or scales them: 1-px stripes stay crisp only at 1:1.

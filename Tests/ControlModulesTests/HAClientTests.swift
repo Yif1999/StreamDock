@@ -101,7 +101,7 @@ import Testing
         #expect(client.entities.first { $0.id == "switch.plug" }?.state == "on")
         #expect(module.face(forSlot: 3).title == "86W")
         module.keyDown(slot: 3)
-        #expect(module.face(forSlot: 3).caption == "Hold")
+        #expect(module.face(forSlot: 3).hold == 0 && module.face(forSlot: 3).title == "86W") // The face stays; only the edge line runs.
         try await wait { client.entities.first { $0.id == "switch.plug" }?.state == "off" && client.busySlot == nil }
         module.keyUp(slot: 3)
         #expect(module.face(forSlot: 3).symbol == "power" && module.face(forSlot: 3).title == nil) // Off: no reading.

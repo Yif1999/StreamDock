@@ -19,6 +19,6 @@ public enum KeyRenderer {
 
     public static func image(for face: KeyFace, pressed: Bool = false) -> CGImage? {
         KeyDesign.image(symbol: face.symbol, value: face.title, label: face.caption, tone: face.tone,
-                        artwork: face.artwork, meter: face.meter, pressed: pressed)
+                        artwork: face.artwork, meter: face.meter, hold: face.hold, pressed: pressed)
     }
 }

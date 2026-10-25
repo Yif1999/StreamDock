@@ -58,6 +58,8 @@ public struct KeyFace: Hashable, Sendable {
     public var tone: KeyTone
     /// A quota gauge behind the value (the one place a service's own color appears).
     public var meter: KeyMeter?
+    /// Press-and-hold progress, 0...1, while a long-press key is being held (`KeyHold`).
+    public var hold: Double?
 
     public init(
         symbol: String? = nil,
@@ -65,7 +67,8 @@ public struct KeyFace: Hashable, Sendable {
         title: String? = nil,
         caption: String? = nil,
         tone: KeyTone = .normal,
-        meter: KeyMeter? = nil
+        meter: KeyMeter? = nil,
+        hold: Double? = nil
     ) {
         self.symbol = symbol
         self.artwork = artwork
@@ -73,6 +76,7 @@ public struct KeyFace: Hashable, Sendable {
         self.caption = caption
         self.tone = tone
         self.meter = meter
+        self.hold = hold
     }
 
     public static let blank = KeyFace()

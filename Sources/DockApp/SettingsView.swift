@@ -9,6 +9,7 @@ struct SettingsView: View {
     let controller: DockController
     @AppStorage("settingsPane") private var pane = "general"
     @State private var musicPermission = Self.musicAutomationStatus()
+    @State private var keystrokePermission = CGPreflightPostEventAccess()
 
     var body: some View {
         TabView(selection: $pane) {
@@ -45,6 +46,7 @@ struct SettingsView: View {
             AudioDevices.shared.start()
             while !Task.isCancelled {
                 musicPermission = Self.musicAutomationStatus()
+                keystrokePermission = CGPreflightPostEventAccess()
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
             }
         }
@@ -101,6 +103,16 @@ struct SettingsView: View {
                     }
                 }
                 Text("媒体键只控制 Apple Music，需要「自动化」权限。")
+                    .font(.caption).foregroundStyle(.secondary)
+                LabeledContent("向 Codex / Claude 发送按键") {
+                    if keystrokePermission {
+                        Label("已授权", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                    } else {
+                        Button("去系统设置授权") { _ = CGRequestPostEventAccess() }
+                            .buttonStyle(.glassProminent)
+                    }
+                }
+                Text("VibeCoding 第三排（Accept、Stop、New、Send、Voice）把按键发给前台的 Codex 或 Claude，需要「辅助功能」权限。")
                     .font(.caption).foregroundStyle(.secondary)
             }
     }

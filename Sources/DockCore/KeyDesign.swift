@@ -41,6 +41,9 @@ public enum KeyDesign {
     /// A pressed key, whatever it shows, goes this much darker — pressed in, like an iOS button.
     /// (Lightening would turn the black ground grey and do nothing to a white "on" key.)
     static let pressedDim = 0.3
+    /// The hold line: this wide, this far in from the edge (so a light key keeps a rim of its
+    /// own color between the line and the black window), from the top middle, clockwise.
+    static let holdWidth = 3, holdInset = 2
     /// Alpha ramp after downsampling: coverage below `low` drops, above `high` is solid.
     static let edge = (low: 0.12, high: 0.82)
 
@@ -62,13 +65,14 @@ public enum KeyDesign {
     /// Renders a face: artwork edge to edge, or glyph / value with an optional label.
     public static func image(symbol: String? = nil, value: String? = nil, label: String? = nil,
                              tone: KeyTone = .normal, artwork: Data? = nil, meter: KeyMeter? = nil,
-                             pressed: Bool = false) -> CGImage? {
+                             hold: Double? = nil, pressed: Bool = false) -> CGImage? {
         let colors = palette(meter == nil ? tone : .normal)
         var canvas = Canvas(side: side)
         canvas.fill(.black)
         if let artwork, let picture = NSImage(data: artwork) {
             canvas.draw(picture: picture)
             if pressed { canvas.darken(pressedDim) }
+            if let hold { canvas.traceEdge(hold) }
             return canvas.image()
         }
         // A state fills the whole key (the panel's black window frames it).
@@ -119,8 +123,25 @@ public enum KeyDesign {
             paint(shifted(main, dx: dx, dy: dy), colors.glyph, onFill: .black)
         }
         if pressed { canvas.darken(pressedDim) }
+        if let hold { canvas.traceEdge(hold) }
         return canvas.image()
     }
+
+    /// The key's edge band as a clockwise path from the top middle: one entry per step along
+    /// the band's centerline, each the band's cross-section there.
+    static let edgePath: [[Int]] = {
+        let w = holdWidth, o = holdInset, lo = o, hi = side - 1 - o
+        func column(_ x: Int, rows: Range<Int>) -> [Int] { rows.map { $0 * side + x } }
+        func row(_ y: Int, columns: Range<Int>) -> [Int] { columns.map { y * side + $0 } }
+        let top = lo..<(lo + w), bottom = (hi - w + 1)..<(hi + 1), left = lo..<(lo + w), right = (hi - w + 1)..<(hi + 1)
+        var steps: [[Int]] = []
+        for x in (side / 2)...hi { steps.append(column(x, rows: top)) }                                   // top, right half
+        for y in (lo + w)...hi { steps.append(row(y, columns: right)) }                                   // right side, down
+        for x in stride(from: hi - w, through: lo, by: -1) { steps.append(column(x, rows: bottom)) }      // bottom, leftward
+        for y in stride(from: hi - w, through: lo + w, by: -1) { steps.append(row(y, columns: left)) }    // left side, up
+        for x in lo..<(side / 2) { steps.append(column(x, rows: top)) }                                   // top, left half
+        return steps
+    }()
 
     // MARK: - Masks (coverage 0...1 at 64×64)
 
@@ -229,6 +250,21 @@ public enum KeyDesign {
                 var a = coverage[i]
                 if sharpen { a = min(1, max(0, (a - edge.low) / (edge.high - edge.low))) }
                 if a > 0 { set(i, color, a) }
+            }
+        }
+
+        /// Traces `progress` (0...1) of the edge band, each pixel in whichever of white or black
+        /// stands out from what is under it; the leading step is partly drawn, so it glides.
+        mutating func traceEdge(_ progress: Double) {
+            let path = KeyDesign.edgePath
+            let reach = min(1, max(0, progress)) * Double(path.count)
+            for (index, step) in path.enumerated() {
+                let alpha = min(1, max(0, reach - Double(index)))
+                guard alpha > 0 else { break }
+                for i in step {
+                    let luminance = 0.2126 * pixels[i * 3] + 0.7152 * pixels[i * 3 + 1] + 0.0722 * pixels[i * 3 + 2]
+                    set(i, luminance > 0.55 ? .black : .white, alpha)
+                }
             }
         }
 

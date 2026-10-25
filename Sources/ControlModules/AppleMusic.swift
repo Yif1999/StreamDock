@@ -120,6 +120,11 @@ final class AppleMusic {
         run("reveal current track", launching: false)
     }
 
+    /// Quits Music the way ⌘Q does (it may still ask about unsaved changes).
+    func quit() {
+        NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID).first?.terminate()
+    }
+
     /// Opens Privacy & Security → Automation.
     func openPermissionSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
@@ -145,7 +150,7 @@ final class AppleMusic {
         return (items.first { $0.name == "p" } ?? items.first { $0.name == "i" })?.value
     }
 
-    private var isRunning: Bool {
+    var isRunning: Bool {
         !NSRunningApplication.runningApplications(withBundleIdentifier: Self.bundleID).isEmpty
     }
 

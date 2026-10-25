@@ -7,15 +7,13 @@ public final class HAModule: DockModule {
     private let client: HAClient
     private var context: ModuleContext?
     private var heldKeys: Set<Int> = []
-    private var holdTask: Task<Void, Never>?
+    /// A protected power key must be held through this before it switches off.
+    private let hold: KeyHold
     private var holdSlot: Int?
     private var holdBinding: HABinding?
 
-    /// How long a protected power key must be held before it switches off.
-    private let hold: Duration
-
     public convenience init() { self.init(client: .shared) }
-    init(client: HAClient, hold: Duration = .seconds(1)) { self.client = client; self.hold = hold }
+    init(client: HAClient, hold: Duration = KeyHold.duration) { self.client = client; self.hold = KeyHold(duration: hold) }
     public func attach(_ context: ModuleContext) {
         self.context = context
         client.onChange = { [weak self] in
@@ -40,7 +38,6 @@ public final class HAModule: DockModule {
             default: return .blank
             }
         }
-        if holdSlot == slot { return KeyFace(title: "1s", caption: "Hold", tone: .caution) }
         let binding = client.bindings[slot]
         guard binding.action != .none else { return .blank }
         let entity = client.entity(for: binding)
@@ -53,8 +50,9 @@ public final class HAModule: DockModule {
         else if client.successSlot == slot, [.scene, .script].contains(binding.action) { caption = "Sent" }
         // A switch that is on shows its power reading in place of its icon.
         let reading = entity?.state == "on" ? client.meter(for: binding)?.powerText : nil
+        let holding = holdSlot == slot ? hold.progress : nil
         func key(symbol: String? = nil, value: String? = nil, active: Bool = false) -> KeyFace {
-            KeyFace(symbol: symbol, title: value, caption: caption, tone: !available ? .dim : active ? .on : .normal)
+            KeyFace(symbol: symbol, title: value, caption: caption, tone: !available ? .dim : active ? .on : .normal, hold: holding)
         }
         if let reading { return key(value: reading, active: true) }
         switch binding.action {
@@ -95,15 +93,15 @@ public final class HAModule: DockModule {
             guard client.command(for: binding) != nil, client.busySlot == nil else { return }
             cancelHold()
             holdSlot = slot; holdBinding = binding
-            context?.setNeedsDisplay()
-            holdTask = Task { [weak self, hold] in
-                do { try await Task.sleep(for: hold) } catch { return }
-                guard let self, !Task.isCancelled, self.heldKeys.contains(slot), self.holdSlot == slot,
+            hold.begin(redraw: { [weak self] in self?.context?.setNeedsDisplay() }) { [weak self] in
+                guard let self, self.heldKeys.contains(slot), self.holdSlot == slot,
                       self.context?.isVisible != false, self.client.connection == .ready,
-                      self.client.bindings[slot] == binding, self.client.entity(for: binding)?.state == "on" else { return }
-                self.holdSlot = nil; self.holdBinding = nil; self.holdTask = nil
+                      self.client.bindings[slot] == binding, self.client.entity(for: binding)?.state == "on" else {
+                    self?.holdSlot = nil; self?.holdBinding = nil
+                    return
+                }
+                self.holdSlot = nil; self.holdBinding = nil
                 self.client.perform(slot: slot, holdConfirmed: true)
-                self.context?.setNeedsDisplay()
             }
         } else { client.perform(slot: slot) }
     }
@@ -113,7 +111,7 @@ public final class HAModule: DockModule {
     }
     public func sceneDidDeactivate() { heldKeys.removeAll(); cancelHold() }
     private func cancelHold() {
-        holdTask?.cancel(); holdTask = nil; holdSlot = nil; holdBinding = nil
+        hold.cancel(); holdSlot = nil; holdBinding = nil
         context?.setNeedsDisplay()
     }
 }
