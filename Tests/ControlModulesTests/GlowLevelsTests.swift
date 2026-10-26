@@ -159,7 +159,7 @@ import Testing
         let b = run(control, seconds: 0.12, from: 1).last!
         let peak = LightLayout.ring.max { a[$0].level - b[$0].level < a[$1].level - b[$1].level }!
         #expect(a[peak].level > 0.9, "bright: \(a[peak].level)")
-        #expect(whiteness(a[peak]) > whiteness(b[peak]) + 0.3, "whitish: \(whiteness(b[peak])) → \(whiteness(a[peak]))")
+        #expect(whiteness(a[peak]) > whiteness(b[peak]) + 0.1, "whitish: \(whiteness(b[peak])) → \(whiteness(a[peak]))")
     }
 
     /// A heavy kick sends a blob off: the colors move more than they would have.

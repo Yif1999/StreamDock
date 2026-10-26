@@ -85,7 +85,7 @@ struct GlowBudget {
     /// near-white — low in color, high in light — while ordinary ones stay their color
     /// (2026-10-27: lifts that never whitened had lost the flash's class).
     static let liftFloor = 0.25, liftCurve = 1.0
-    static let whiteFrom = 0.5, liftWhite = 0.7
+    static let whiteFrom = 0.65, liftWhite = 0.3
     static let reachMin = 0.1, reachRange = 0.65, reachCurve = 2.0, spread = 0.18
     static let swellGrow = 0.6, liftChroma = 0.2
     static let liftAttack = 0.035, liftDecay = 0.55
