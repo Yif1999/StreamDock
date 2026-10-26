@@ -12,7 +12,7 @@ private let log = Logger(subsystem: "StreamDock", category: "Music")
 /// Steps 2–3 send the album ID or the artist and album name to Apple.
 @MainActor
 final class ArtworkLoader {
-    private var cache: [String: [RGB]] = [:]
+    private var cache: [String: [Swatch]] = [:]
     private var images: [String: Data] = [:]
 
     func image(for track: AppleMusic.Track) -> Data? { images["\(track.artist)\u{1F}\(track.album)"] }
@@ -25,7 +25,7 @@ final class ArtworkLoader {
         return list
     }
 
-    func palette(for track: AppleMusic.Track, from music: AppleMusic) async -> [RGB] {
+    func palette(for track: AppleMusic.Track, from music: AppleMusic) async -> [Swatch] {
         let key = "\(track.artist)\u{1F}\(track.album)"
         if let cached = cache[key] { return cached }
 

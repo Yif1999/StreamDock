@@ -37,7 +37,9 @@ import Testing
         let (codex, sent) = module(front: AIService.codex.bundleID)
         codex.codexWorking = { true }
         codex.keyDown(slot: 1)
-        try await Task.sleep(for: .milliseconds(400))
+        // Wait for the confirming Esc (due 150 ms later) however busy the machine is.
+        let deadline = ContinuousClock.now + .seconds(3)
+        while sent().count < 3 && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(sent() == ["53/0", "stopped codex", "53/0"])  // Esc, then the confirming Esc
         // Codex waiting on an approval (not working), idle Codex, or Claude: a single Esc,
         // which declines the request where there is one.

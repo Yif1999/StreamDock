@@ -33,6 +33,35 @@ public enum M18Layout {
     public static let leftBarLED = 22
     public static let rightBarLED = 23
 
+    /// Where an LED sits seen from above, in a unit square (x 0 left → 1 right, y 0 front →
+    /// 1 back; the base is square, 2026-10-27). The ring runs evenly round the edge from the
+    /// middle of the left side, down and counterclockwise: 0 just below that middle, 5 the
+    /// middle of the front, 10 and 11 either side of the right side's middle, 16 the middle of
+    /// the back, 21 just above the left side's middle — each side holds 5.5 LEDs, the corners
+    /// falling between two. The short bars are level strips `barLength` long, centred 0.17 and
+    /// 0.83 across, 0.22 in from the front, either side of the round keys (from a photo,
+    /// 2026-10-27; the base is about 1.1 wide to 1 deep, taken as square).
+    public static let barLength = 0.12
+    public static func position(ofLED index: Int) -> (x: Double, y: Double) {
+        switch index {
+        case leftBarLED: return (0.17, 0.22)
+        case rightBarLED: return (0.83, 0.22)
+        default: return edgePoint(lap: (Double(index) + 0.5) / Double(ringLEDs.count))
+        }
+    }
+
+    /// The point `lap` of the way round the edge (0...1), in the ring's order and square.
+    public static func edgePoint(lap: Double) -> (x: Double, y: Double) {
+        let s = (lap - lap.rounded(.down)) * 4   // distance round the edge, in sides
+        switch s {
+        case ..<0.5: return (0, 0.5 - s)
+        case ..<1.5: return (s - 0.5, 0)
+        case ..<2.5: return (1, s - 1.5)
+        case ..<3.5: return (3.5 - s, 1)
+        default: return (0, 4.5 - s)
+        }
+    }
+
     static let vendorID: UInt16 = 0x6603
     /// 0x1009 = M18 (CN firmware), 0x1012 = M18EN.
     static let productIDs: [UInt16] = [0x1009, 0x1012]

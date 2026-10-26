@@ -180,7 +180,7 @@ public final class MediaModule: DockModule {
         paletteTrack = track
         Task {
             let palette = await artwork.palette(for: track, from: music)
-            log.notice("Palette for \(track.artist, privacy: .public) – \(track.album, privacy: .public): \(palette.map(\.hex).joined(separator: " "), privacy: .public)")
+            log.notice("Palette for \(track.artist, privacy: .public) – \(track.album, privacy: .public): \(palette.map { "\($0.color.hex) \(Int(($0.share * 100).rounded()))%" }.joined(separator: " "), privacy: .public)")
             guard music.track == track else { return }
             cover = artwork.image(for: track)
             context?.setNeedsDisplay()
@@ -218,9 +218,14 @@ public final class MediaModule: DockModule {
                     let rhythm = self.audio.snapshot
                     let bpm = rhythm.bpm.map { String(format: "%.0f", $0) } ?? "-"
                     log.notice("Rhythm \(rhythm.state.rawValue, privacy: .public) bpm=\(bpm, privacy: .public) confidence=\(rhythm.confidence, format: .fixed(precision: 2)) activity=\(rhythm.activity, format: .fixed(precision: 2)) intensity=\(rhythm.intensity, format: .fixed(precision: 2)) signal=\(self.audio.hasSignal)")
-                    if let seconds = UserDefaults.standard.object(forKey: "rhythmTraceSeconds") as? Double, seconds > 0 {
+                    let seconds = UserDefaults.standard.double(forKey: "rhythmTraceSeconds")  // a number or a numeric string
+                    if seconds > 0 {
                         UserDefaults.standard.removeObject(forKey: "rhythmTraceSeconds")
-                        RhythmRecorder.shared.start(seconds: seconds, frameRate: self.audio.frameRate)
+                        let position = await self.music.playerPosition()
+                        let now = ProcessInfo.processInfo.systemUptime
+                        let track = self.music.track.map { "\($0.name) – \($0.artist)" } ?? "?"
+                        let note = String(format: "%@ | at uptime %.3f the track was %.2f s in", track, now, position ?? -1)
+                        RhythmRecorder.shared.start(seconds: seconds, frameRate: self.audio.frameRate, note: note)
                     }
                 }
             }

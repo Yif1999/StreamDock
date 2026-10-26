@@ -17,15 +17,21 @@ public extension LightAnimation { var isActive: Bool { true } }
 
 /// Where the LEDs physically are, for animations that move along the ring.
 public enum LightLayout {
-    /// The strip's refresh rate, measured on the M18 (2026-10-25, `dock-probe ledfps`): 60
-    /// white/off flips a second show cleanly, 90 and 120 do not. Frames go out on a fixed grid
-    /// at this rate, like the key screen's 60 Hz.
+    /// The light engine's frame rate: 60 Hz like the key screen, by choice — the strip itself
+    /// shows every frame up to at least 240 Hz (2026-10-25, `dock-probe ledwalk` + `ledscan`).
+    /// Frames go out on a fixed grid at this rate.
     public static let framesPerSecond = 60.0
     /// The ring around the base, in physical order; it closes from the last back to the first.
     public static let ring = M18Layout.ringLEDs
     /// The two short bars beside the round keys (not part of the ring).
     public static let leftBar = M18Layout.leftBarLED
     public static let rightBar = M18Layout.rightBarLED
+    /// Where an LED sits seen from above, in a unit square (see `M18Layout.position(ofLED:)`).
+    public static func position(_ led: Int) -> (x: Double, y: Double) { M18Layout.position(ofLED: led) }
+    /// How long the short bars are, level strips across the base (same square).
+    public static let barLength = M18Layout.barLength
+    /// The point `lap` of the way round the ring's edge, in the same square.
+    public static func edgePoint(lap: Double) -> (x: Double, y: Double) { M18Layout.edgePoint(lap: lap) }
 }
 
 /// Drives the light strip: a steady color, or an animation at `LightLayout.framesPerSecond`, with cross-fades

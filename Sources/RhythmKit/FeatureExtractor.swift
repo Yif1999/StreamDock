@@ -10,10 +10,16 @@ import Foundation
 public final class FeatureExtractor {
     public static let frameSize = 1024
     public static let hopSize = 512
-    /// Band edges in Hz.
+    /// Band edges in Hz, end to end. Mid runs to 6 kHz so it holds a snare's crack and wires
+    /// (2–6 kHz), its most telling part, and high starts above them: from 2.5 kHz high fell on
+    /// the snares' own beats instead of the hi-hats' (`dock-probe bandcompare`, 2026-10-27).
     public static let bandEdges: [(Bands.Band, ClosedRange<Double>)] = [
-        (.low, 30...150), (.mid, 150...2500), (.high, 2500...11000),
+        (.low, 30...150), (.mid, 150...6000), (.high, 6000...16000),
     ]
+    /// Finer bands, recorded alongside for offline study of how to split the spectrum
+    /// (`BandComparison`): kick and bass, a snare's body, the middle, a snare's wires and crack,
+    /// cymbals. Not used by the live analysis.
+    public static let detailEdges: [ClosedRange<Double>] = [30...150, 150...400, 400...2000, 2000...6000, 6000...16000]
     /// Log compression strength, Y = log(1 + γ·|X|).
     static let compression: Float = 1000
 
@@ -27,6 +33,8 @@ public final class FeatureExtractor {
     private var previousLog: [Float]?
     private var previousMagnitudes: [Float]?
     private var bandBins: [(Bands.Band, Range<Int>)] = []
+    private var detailBins: [Range<Int>] = []
+    private var detailScale: [AdaptiveScale] = []
 
     private var fluxScale: [Bands.Band: AdaptiveScale] = [:]
     private var loudnessScale: [Bands.Band: AdaptiveScale] = [:]
@@ -41,6 +49,12 @@ public final class FeatureExtractor {
             let last = min(Self.frameSize / 2 - 1, Int((range.upperBound / binWidth).rounded(.down)))
             return (band, first..<max(first + 1, last + 1))
         }
+        detailBins = Self.detailEdges.map { range in
+            let first = max(1, Int((range.lowerBound / binWidth).rounded(.up)))
+            let last = min(Self.frameSize / 2 - 1, Int((range.upperBound / binWidth).rounded(.down)))
+            return first..<max(first + 1, last + 1)
+        }
+        detailScale = Self.detailEdges.map { _ in AdaptiveScale(.mean, seconds: 10, floor: 1e-3) }
         for band in Bands.Band.allCases {
             fluxScale[band] = AdaptiveScale(.mean, seconds: 10, floor: 1e-3)
             loudnessScale[band] = AdaptiveScale(.peak, seconds: 50, floor: 1e-5)
@@ -105,11 +119,26 @@ public final class FeatureExtractor {
             }
             loudness[band] = min(1, loudnessScale[band]!.normalize(rms, dt: dt))
         }
+        var detail: [Double] = [], detailRaw: [Double] = []
+        if let previousLog, let previousMagnitudes {
+            for (index, bins) in detailBins.enumerated() {
+                var rise: Float = 0, linearRise: Float = 0
+                for bin in bins {
+                    rise += max(0, logMagnitudes[bin] - previousLog[bin])
+                    linearRise += max(0, magnitudes[bin] - previousMagnitudes[bin])
+                }
+                detail.append(detailScale[index].normalize(Double(rise) / Double(bins.count), dt: dt))
+                detailRaw.append(Double(linearRise) / Double(bins.count))
+            }
+        }
         previousLog = logMagnitudes
         previousMagnitudes = magnitudes
 
         let weights = FeatureFrame.onsetWeights
         let onset = weights.low * flux.low + weights.mid * flux.mid + weights.high * flux.high
-        return FeatureFrame(time: time, flux: flux, rawFlux: rawFlux, onset: onset, loudness: loudness)
+        var frame = FeatureFrame(time: time, flux: flux, rawFlux: rawFlux, onset: onset, loudness: loudness)
+        frame.detail = detail
+        frame.detailRaw = detailRaw
+        return frame
     }
 }

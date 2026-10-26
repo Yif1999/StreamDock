@@ -108,6 +108,12 @@ final class AppleMusic {
         return result.error == nil && result.strings.first == "ok"
     }
 
+    /// Seconds into the current track, if Music says.
+    func playerPosition() async -> Double? {
+        let result = await execute("tell application id \"\(Self.bundleID)\" to return player position")
+        return result.strings.first.flatMap { Double($0.replacingOccurrences(of: ",", with: ".")) }
+    }
+
     func airPlayEnabled() async -> Bool {
         guard isRunning else { return false }
         let result = await execute("tell application id \"com.apple.Music\" to get AirPlay enabled as string")

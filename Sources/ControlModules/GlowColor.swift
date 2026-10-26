@@ -72,12 +72,26 @@ struct OKLab: Equatable {
         return (clipped.0 / peak, clipped.1 / peak, clipped.2 / peak)
     }
 
+    /// Euclidean distance in OKLab (≈ perceived color difference).
+    func distance(to other: OKLab) -> Double {
+        ((l - other.l) * (l - other.l) + (a - other.a) * (a - other.a) + (b - other.b) * (b - other.b)).squareRoot()
+    }
+
+    /// The same hue and lightness with chroma × `factor`.
+    func saturated(by factor: Double) -> OKLab {
+        OKLab(l: l, a: a * factor, b: b * factor)
+    }
+
     func mixed(with other: OKLab, amount: Double) -> OKLab {
         OKLab(l: l + (other.l - l) * amount, a: a + (other.a - a) * amount, b: b + (other.b - b) * amount)
     }
 
     /// Weighted average that keeps colors vivid: plain OKLab averaging of two distant hues still
-    /// loses chroma in between; `keepChroma` of that loss is put back (hue unchanged).
+    /// loses chroma in between; `keepChroma` of that loss is put back (hue unchanged) — less as
+    /// the colors cancel out (the average's chroma under `coherent` of theirs): near half and
+    /// half, opposite hues average to almost grey with a hue that swings fast as the weights
+    /// shift, and putting the chroma back there made one LED flip color at once (2026-10-27).
+    static let coherent = 0.4
     static func blend(_ colors: [OKLab], weights: [Double], keepChroma: Double) -> OKLab {
         let total = max(weights.reduce(0, +), 1e-9)
         var mean = OKLab(l: 0, a: 0, b: 0)
@@ -90,7 +104,8 @@ struct OKLab: Equatable {
         }
         let current = mean.chroma
         guard current > 1e-4 else { return mean }
-        let restored = current + keepChroma * (chroma - current)
+        let t = min(1, current / max(chroma, 1e-9) / coherent)
+        let restored = current + keepChroma * t * t * (3 - 2 * t) * (chroma - current)
         return OKLab(l: mean.l, a: mean.a * restored / current, b: mean.b * restored / current)
     }
 

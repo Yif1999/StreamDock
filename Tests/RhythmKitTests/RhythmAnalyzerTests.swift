@@ -205,3 +205,79 @@ private func errors(_ times: [Double], to targets: [Double]) -> [Double] {
         #expect(abs(trace.frames[0].onset - (1.5 + 0.8 * 0.25 + 0.5 * 2)) < 1e-9)
     }
 }
+
+@Suite struct LowEndTests {
+    /// A steady bass drone settles to no draw; a kick rising out of it draws fully.
+    @Test func droneSettlesAndKicksDraw() {
+        var draw = LowDraw()
+        var time = 0.0
+        for _ in 0..<600 { time += 0.01; draw.push(time: time, level: 0.5) }
+        #expect(draw.value < 0.05, "drone \(draw.value)")
+        draw.push(time: time + 0.01, level: 0.95)
+        #expect(draw.value > 0.9, "kick \(draw.value)")
+    }
+
+    /// Only the heaviest kicks of the last seconds count, sized against the big ones.
+    @Test func onlyHeavyKicksBurn() {
+        var kicks = KickDetector()
+        var fired: [(beat: Int, strength: Double)] = []
+        for beat in 0..<40 {
+            let heavy = beat % 4 == 0
+            if let strength = kicks.push(time: Double(beat) * 0.5, size: heavy ? 1.0 : 0.3) { fired.append((beat, strength)) }
+        }
+        // Every heavy kick once ranking has enough history (8 s), never a light one.
+        #expect(fired.count >= 5, "fired at \(fired.map(\.beat))")
+        #expect(fired.allSatisfy { $0.beat % 4 == 0 && $0.strength > 0.9 }, "\(fired)")
+    }
+
+    /// A kick's click lands in the mid band too, small for that band: that is the kick. A snare
+    /// landing with a kick is big for the mid band, and wins.
+    @Test func snaresWinOverTheKicksTheyLandWith() {
+        let kicks = Score.steady(bpm: 120, to: 30, band: .low)
+        let clicks = Score.steady(bpm: 120, to: 30, band: .mid, strength: 2)
+        let snares = Score.steady(bpm: 60, from: 1, to: 30, band: .mid, strength: 6)   // on every other kick
+        let run = Run(Score(hits: (kicks + clicks + snares).map { (time: $0.0, band: $0.1, strength: $0.2) }, duration: 30).frames())
+        let lifts = run.events.compactMap { entry -> Double? in
+            if case .lift(let time, .mid, _) = entry.event, time > 5 { return time }
+            return nil
+        }
+        let onSnares = lifts.filter { abs($0 - $0.rounded()) < 0.03 }.count
+        let onClicksOnly = lifts.count - onSnares
+        #expect(onSnares >= 20, "snares lifted: \(onSnares) of 25")
+        #expect(onClicksOnly <= 2, "kick clicks lifted: \(onClicksOnly)")
+    }
+
+    /// Detail bands and the note survive the trace format.
+    @Test func detailBandsRoundTrip() {
+        var frame = FeatureFrame(time: 1.5, flux: Bands(low: 1, mid: 2, high: 3), onset: 0, loudness: Bands())
+        frame.detail = [1, 2, 3, 4, 5]
+        frame.detailRaw = [0.1, 0.2, 0.3, 0.4, 0.5]
+        let text = [RhythmTrace.header(frameRate: 93.75), RhythmTrace.noteLine("Song – Artist | at uptime 10.000 the track was 3.00 s in"), RhythmTrace.frameLine(frame)].joined(separator: "\n")
+        let trace = RhythmTrace(text: text)!
+        #expect(trace.frames.first?.detail == [1, 2, 3, 4, 5] && trace.frames.first?.detailRaw == [0.1, 0.2, 0.3, 0.4, 0.5])
+        #expect(trace.notes == ["Song – Artist | at uptime 10.000 the track was 3.00 s in"])
+    }
+
+    /// Kick or snare by where the strike stands out, whatever the song: a kick with a loud click
+    /// stays a kick, a snare with a heavy body stays a snare, never the other way round.
+    @Test func strikesSortByWhereTheyStandOut() {
+        let kicks = Score.steady(bpm: 60, to: 30, band: .low, strength: 6)                       // beats 1, 3
+        let clicks = Score.steady(bpm: 60, to: 30, band: .mid, strength: 4)                      // their loud clicks
+        let snares = Score.steady(bpm: 60, from: 0.5, to: 30, band: .mid, strength: 6)          // 2, 4
+        let bodies = Score.steady(bpm: 60, from: 0.5, to: 30, band: .low, strength: 3)          // their low body
+        let run = Run(Score(hits: (kicks + clicks + snares + bodies).map { (time: $0.0, band: $0.1, strength: $0.2) }, duration: 30).frames())
+        var onKicks = 0, onSnares = 0, kicksOnSnares = 0
+        for (_, event) in run.events {
+            switch event {
+            case .lift(let time, .mid, _) where time > 8:
+                if abs(time - time.rounded()) < 0.03 { onKicks += 1 } else { onSnares += 1 }
+            case .kick(let time, _) where time > 8:
+                if abs(time - time.rounded()) > 0.4 { kicksOnSnares += 1 }
+            default: break
+            }
+        }
+        #expect(onSnares >= 20, "snares lifted: \(onSnares) of 22")
+        #expect(onKicks <= 1, "kicks taken for snares: \(onKicks)")
+        #expect(kicksOnSnares == 0, "snares taken for kicks: \(kicksOnSnares)")
+    }
+}

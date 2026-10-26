@@ -87,6 +87,10 @@ public struct FeatureFrame: Sendable, Equatable {
     public var onset: Double
     /// Loudness per band, relative to its recent peak (0...1).
     public var loudness: Bands
+    /// Flux (normalised, like `flux`) and raw flux in `FeatureExtractor.detailEdges`, for
+    /// offline study only; empty when not measured.
+    public var detail: [Double] = []
+    public var detailRaw: [Double] = []
 
     public init(time: Double, flux: Bands, rawFlux: Bands? = nil, onset: Double, loudness: Bands) {
         self.time = time

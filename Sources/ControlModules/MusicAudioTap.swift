@@ -178,7 +178,8 @@ final class MusicAudioTap: @unchecked Sendable {
             lock.unlock()
         }
         // A pending debug trace starts with the session, so it covers the very first frames.
-        if let seconds = UserDefaults.standard.object(forKey: "rhythmTraceSeconds") as? Double, seconds > 0 {
+        let seconds = UserDefaults.standard.double(forKey: "rhythmTraceSeconds")  // a number or a numeric string
+        if seconds > 0 {
             UserDefaults.standard.removeObject(forKey: "rhythmTraceSeconds")
             RhythmRecorder.shared.start(seconds: seconds, frameRate: currentFrameRate)
         }
@@ -258,14 +259,7 @@ final class MusicAudioTap: @unchecked Sendable {
 
         lock.lock()
         // A global activity can hide Music for hours. Do not queue old beats for its return.
-        pendingEvents.removeAll { event in
-            let timestamp: Double
-            switch event {
-            case .accent(let time, _), .expectedBeat(let time): timestamp = time
-            case .hit(let hit): timestamp = hit.time
-            }
-            return timestamp < now - 0.25
-        }
+        pendingEvents.removeAll { $0.time < now - 0.25 }
         pendingEvents += events
         latestSnapshot = analyzer.snapshot
         if sqrt(energy / Float(mono.count)) > 0.0005 { lastSignal = now }

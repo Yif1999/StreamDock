@@ -1,16 +1,23 @@
 import AppKit
 import DockCore
 
+/// One color of a cover and its share of the cover's light (the shares of a palette add up to 1).
+public struct Swatch: Equatable, Sendable {
+    public let color: RGB
+    public let share: Double
+    public init(_ color: RGB, share: Double) { self.color = color; self.share = share }
+}
+
 /// The colors album artwork gives the light strip, as the cover has them (see `palette`).
 public enum ArtworkPalette {
-    static let fallback = [RGB(255, 214, 170), RGB(255, 170, 120)]
+    static let fallback = [Swatch(RGB(255, 214, 170), share: 0.6), Swatch(RGB(255, 170, 120), share: 0.4)]
 
-    public static func colors(from data: Data, maxColors: Int = 4) -> [RGB] {
+    public static func colors(from data: Data, maxColors: Int = 4) -> [Swatch] {
         guard let image = NSImage(data: data)?.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return fallback }
         return colors(from: image, maxColors: maxColors)
     }
 
-    static func colors(from image: CGImage, maxColors: Int = 4) -> [RGB] {
+    static func colors(from image: CGImage, maxColors: Int = 4) -> [Swatch] {
         let side = 32
         // Let CoreGraphics own the buffer (an `&array` pointer is only valid during the init
         // call) and pin the byte order to R, G, B, A.
@@ -40,9 +47,11 @@ public enum ArtworkPalette {
     ///   plain average of its pixels — no chroma lift, no lightness change, no invented partner;
     /// - uncolored light with at least `whiteShare` adds a white tinted like those pixels; a
     ///   cover with no hue at all is that white alone;
-    /// - a single color gets a paler shade of itself, so the flow has something to move against.
-    static let colorChroma = 0.04, minShare = 0.05, whiteShare = 0.3
-    static func palette(from pixels: [OKLab], maxColors: Int = 4) -> [RGB] {
+    /// - a single color gets a paler shade of itself, so the flow has something to move against;
+    /// - each color keeps its share of the light, so the strip gives the main color the most room.
+    ///   A single color's paler shade takes `shadeShare`.
+    static let colorChroma = 0.04, minShare = 0.05, whiteShare = 0.3, shadeShare = 0.3
+    static func palette(from pixels: [OKLab], maxColors: Int = 4) -> [Swatch] {
         let bucketCount = 24
         var light = [Double](repeating: 0, count: bucketCount)
         var sums = [OKLab](repeating: OKLab(l: 0, a: 0, b: 0), count: bucketCount)
@@ -77,11 +86,11 @@ public enum ArtworkPalette {
             members.append((white, tint))
             members.sort { $0.light > $1.light }
         }
-        var colors = members.map(\.color)
-        if colors.count == 1, let only = colors.first {
-            colors.append(OKLab(l: min(0.95, only.l + 0.05), chroma: only.chroma * 0.7, hue: only.hue))
+        if members.count == 1, let only = members.first?.color {
+            members = [(1 - shadeShare, only), (shadeShare, OKLab(l: min(0.95, only.l + 0.05), chroma: only.chroma * 0.7, hue: only.hue))]
         }
-        return colors.map(\.srgb)
+        let sum = members.reduce(0) { $0 + $1.light }
+        return members.map { Swatch($0.color.srgb, share: $0.light / sum) }
     }
 
     /// Hue distance in radians, 0…π.

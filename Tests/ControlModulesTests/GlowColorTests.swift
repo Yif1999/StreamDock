@@ -24,17 +24,17 @@ import Testing
     @Test func paletteKeepsTheCoversOwnColors() {
         func cover(_ parts: [(RGB, Int)]) -> [OKLab] { parts.flatMap { Array(repeating: OKLab(srgb: $0.0), count: $0.1) } }
         // A grey-green cover with a few vivid pixels: a faintly tinted white, never their blue.
-        let grey = ArtworkPalette.palette(from: cover([(RGB(205, 215, 210), 990), (RGB(20, 110, 220), 10)])).map(OKLab.init(srgb:))
+        let grey = ArtworkPalette.palette(from: cover([(RGB(205, 215, 210), 990), (RGB(20, 110, 220), 10)])).map { OKLab(srgb: $0.color) }
         #expect(grey.count == 2 && grey.allSatisfy { $0.chroma < 0.03 }, "\(grey.map(\.chroma))")
         // Red over white: the red as it is, then a white for the white area.
         let red = RGB(180, 40, 50)
-        let redWhite = ArtworkPalette.palette(from: cover([(red, 600), (RGB(245, 240, 235), 400)])).map(OKLab.init(srgb:))
+        let redWhite = ArtworkPalette.palette(from: cover([(red, 600), (RGB(245, 240, 235), 400)])).map { OKLab(srgb: $0.color) }
         #expect(redWhite.count == 2 && abs(redWhite[0].chroma - OKLab(srgb: red).chroma) < 0.01 && redWhite[1].chroma < 0.03)
         // Near-black gives no light: a small blue patch on black is the whole palette, with a paler shade of itself.
-        let blue = ArtworkPalette.palette(from: cover([(RGB(8, 8, 10), 900), (RGB(30, 80, 200), 100)])).map(OKLab.init(srgb:))
+        let blue = ArtworkPalette.palette(from: cover([(RGB(8, 8, 10), 900), (RGB(30, 80, 200), 100)])).map { OKLab(srgb: $0.color) }
         #expect(blue.count == 2 && abs(blue[0].hue - blue[1].hue) < 0.01 && blue[1].chroma < blue[0].chroma)
         // A dark green still counts by its area, not its darkness.
-        let green = ArtworkPalette.palette(from: cover([(RGB(20, 60, 30), 500), (RGB(240, 240, 240), 500)])).map(OKLab.init(srgb:))
+        let green = ArtworkPalette.palette(from: cover([(RGB(20, 60, 30), 500), (RGB(240, 240, 240), 500)])).map { OKLab(srgb: $0.color) }
         #expect(green.contains { $0.chroma > 0.05 && abs($0.hue - OKLab(srgb: RGB(20, 60, 30)).hue) < 0.1 })
     }
 
@@ -50,7 +50,7 @@ import Testing
 @MainActor @Suite struct PauseTests {
     /// Paused, the glow eases down (no jump) to the quietest playing level and breathes there.
     @Test func pauseSettlesIntoABreath() {
-        let glow = MusicGlow(palette: [RGB(40, 90, 230), RGB(240, 150, 40)])
+        let glow = MusicGlow(palette: [Swatch(RGB(40, 90, 230), share: 0.6), Swatch(RGB(240, 150, 40), share: 0.4)])
         var snapshot = RhythmSnapshot()
         snapshot.intensity = 1
         // Perceived brightness: the brightest ring LED (a blob's center) and a short bar.

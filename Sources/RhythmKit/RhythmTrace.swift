@@ -4,7 +4,8 @@ import Foundation
 /// music) plus the times the listener tapped along to the beat.
 ///
 ///     # streamdock-rhythm-trace v1 frameRate=93.750
-///     F <time> <flux low> <flux mid> <flux high> <loudness low> <loudness mid> <loudness high> [<raw flux low> <raw flux mid> <raw flux high>]
+///     F <time> <flux low> <flux mid> <flux high> <loudness low> <loudness mid> <loudness high> [<raw flux low> <raw flux mid> <raw flux high> [<detail flux ×5> <detail raw flux ×5>]]
+///     # note <text>   (what was playing, from where — for matching times to the song)
 ///     T <time>
 public struct RhythmTrace: Sendable {
     public var frameRate: Double
@@ -15,14 +16,22 @@ public struct RhythmTrace: Sendable {
         self.frameRate = frameRate
     }
 
+    public var notes: [String] = []
+
     public static func frameLine(_ frame: FeatureFrame) -> String {
-        String(
+        var line = String(
             format: "F %.4f %.3f %.3f %.3f %.3f %.3f %.3f %.5f %.5f %.5f", frame.time,
             frame.flux.low, frame.flux.mid, frame.flux.high,
             frame.loudness.low, frame.loudness.mid, frame.loudness.high,
             frame.rawFlux.low, frame.rawFlux.mid, frame.rawFlux.high
         )
+        if frame.detail.count == FeatureExtractor.detailEdges.count, frame.detailRaw.count == frame.detail.count {
+            line += frame.detail.map { String(format: " %.3f", $0) }.joined() + frame.detailRaw.map { String(format: " %.6f", $0) }.joined()
+        }
+        return line
     }
+
+    public static func noteLine(_ text: String) -> String { "# note " + text.replacingOccurrences(of: "\n", with: " ") }
 
     public static func tapLine(_ time: Double) -> String { String(format: "T %.4f", time) }
 
@@ -34,24 +43,32 @@ public struct RhythmTrace: Sendable {
         var frameRate: Double?
         var frames: [FeatureFrame] = []
         var taps: [Double] = []
+        var notes: [String] = []
         let weights = FeatureFrame.onsetWeights
         for line in text.split(separator: "\n") {
             let fields = line.split(separator: " ")
             switch fields.first {
             case "#":
+                if fields.count > 1, fields[1] == "note" { notes.append(fields.dropFirst(2).joined(separator: " ")) }
                 if let field = fields.first(where: { $0.hasPrefix("frameRate=") }) {
                     frameRate = Double(field.dropFirst("frameRate=".count))
                 }
             case "F":
                 let values = fields.dropFirst().compactMap { Double($0) }
-                guard values.count == 7 || values.count == 10 else { continue }
+                let details = FeatureExtractor.detailEdges.count
+                guard values.count == 7 || values.count == 10 || values.count == 10 + 2 * details else { continue }
                 let flux = Bands(low: values[1], mid: values[2], high: values[3])
-                let raw = values.count == 10 ? Bands(low: values[7], mid: values[8], high: values[9]) : nil
-                frames.append(FeatureFrame(
+                let raw = values.count >= 10 ? Bands(low: values[7], mid: values[8], high: values[9]) : nil
+                var frame = FeatureFrame(
                     time: values[0], flux: flux, rawFlux: raw,
                     onset: weights.low * flux.low + weights.mid * flux.mid + weights.high * flux.high,
                     loudness: Bands(low: values[4], mid: values[5], high: values[6])
-                ))
+                )
+                if values.count == 10 + 2 * details {
+                    frame.detail = Array(values[10..<(10 + details)])
+                    frame.detailRaw = Array(values[(10 + details)...])
+                }
+                frames.append(frame)
             case "T":
                 if fields.count > 1, let time = Double(fields[1]) { taps.append(time) }
             default:
@@ -62,6 +79,7 @@ public struct RhythmTrace: Sendable {
         self.frameRate = frameRate
         self.frames = frames
         self.taps = taps
+        self.notes = notes
     }
 
     /// Runs the analyzer over the frames: the beat grid (expected beats while locked), the
@@ -77,7 +95,7 @@ public struct RhythmTrace: Sendable {
                 switch event {
                 case .expectedBeat(let time): beats.append(time)
                 case .accent(let time, _): accents.append(time)
-                case .hit: break
+                case .hit, .kick, .lift: break
                 }
             }
             snapshots.append((frame.time, analyzer.snapshot))

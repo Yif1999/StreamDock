@@ -1,69 +1,120 @@
 import Foundation
 
 /// How MusicGlow spends its brightness, in one place. Every level is *perceived* brightness
-/// 0...1 (`LEDOutput` turns it into LED drive with a gamma), and layers combine by *screen*
-/// (1 − (1 − a)(1 − b)), the way overlapping light adds up: the result never exceeds 1, and
-/// adding a layer always brightens — a new flash on top of a fading one is always visible.
+/// 0...1 (`LEDOutput` turns it into LED drive with a gamma), and flashes combine by *screen*
+/// (1 − (1 − a)(1 − b)), the way overlapping light adds up: never past 1, and a new flash on
+/// top of a fading one always shows.
 ///
-///     brightness = base + (1 − base) · screen(accent, groove)     (per LED)
-///
-/// - base: the steady glow the music sits on — calm level, a little lower the more rhythmic
-///   the passage (so flashes stand out), breathing with loudness;
-/// - accent: flashes of the strongest hits, sized by RhythmKit (strength 1 → full brightness).
-///   Each starts at one point of the ring and spreads: a heavy hit fills the whole ring, a
-///   light one stays a local swell;
-/// - groove: soft pulses on the expected beats of a steady grid, whole ring.
-///
-/// Color: blobs blend in OKLab; at a flash's peak the color lifts toward white (`bloom`), like
-/// light spilling over. Paused, everything eases into a slow, dim breath (`pause*`).
-///
-/// Motion and texture have budgets too: the blobs' speed only ever eases (`flowEase`) toward
-/// a target set by how rhythmic and how busy the music is, never kicked; loudness and
-/// intensity are smoothed before they touch anything; sparks are the same envelope as the
-/// flashes (`sparkAttack`, `sparkDecay`), spaced (`sparkSpacing`) and never next to a lit one.
+/// The picture (after HomePod's Sound Glow, 2026-10-27): a square canvas the size of the base,
+/// seen from above; each LED shows it where the LED sits (`LightLayout.position`) — the ring
+/// its edge, the short bars two points inside.
+/// - ground and blobs: the main color fills the canvas; soft discs of every cover color and a
+///   white drift about on it, each sized by its share (`blobRadius`). Where a blob nears the
+///   edge, that stretch of the ring takes its color; nothing turns round the ring as a whole,
+///   and a blob is never small enough to color a single LED alone (`blobMin`);
+/// - kick: a heavy kick sends the blob nearest a new place on the edge toward it (`kickSpeed`)
+///   — the colors move to the beat, damped (`damping`) between;
+/// - draw: the low end (kick and bass) is the "in" — the blobs shrink back (`drawShrink`), the
+///   light dims (`sag`) and the color deepens (`drawDeepen`); letting go, they swell a little
+///   past rest — bigger, richer — and settle (`rebound*`);
+/// - lift: a mid hit (snare, a vocal attack — not the click of a kick, see `RhythmEvent.lift`)
+///   is the "out" — the light brightens from a new place on the edge outward, and the blob
+///   nearest it swells (`swellGrow`); a heavy one flashes near-white at its peak (`liftWhite`);
+///   snares come first (`liftHoldsDraw`);
+/// - glint: a high hit heard on its own — no kick or snare for a while, the bass not drawing —
+///   is a short, crisp, whitish point on the edge; under the drums it would only be clutter.
+/// Kicks, lifts and glints all land at places picked by one rule (`MusicGlow.place`).
 struct GlowBudget {
-    /// Base glow: `calm` with no rhythm, `dip` lower at full intensity, ± `breath` with loudness.
-    static let calm = 0.6, dip = 0.15, breath = 0.1
-    /// Accent flash size for strength s: (`accentFloor` + (1 − `accentFloor`)·s^`accentCurve`)·intensity.
-    static let accentFloor = 0.15, accentCurve = 1.5
-    /// Grid pulse size at full intensity.
-    static let groove = 0.3
-    /// The short bars: their own, dimmer base; accents light them by how far they spread.
+    /// Brightness: `calm` with no rhythm, `dip` lower at full intensity (headroom for the
+    /// lifts), ± `breath` with loudness.
+    static let calm = 0.55, dip = 0.1, breath = 0.08
+    /// The short bars: their own, dimmer base; they sag with the draw and light with the lifts.
     static let barCalm = 0.35, barBreath = 0.15
 
-    /// Blob profile across the ring: perceived brightness from `blobFloor` between blobs to 1
-    /// at a blob's center, `blobWidth` laps wide (growing with loudness and flashes).
-    static let blobFloor = 0.2, blobCurve = 0.75, blobWidth = 0.12
+    /// Canvas: the ground counts as `groundWeight` against the blobs' discs (weight 1 at a
+    /// center, Gaussian); a blob covering `share` of the cover has radius √(`blobArea`·share/π),
+    /// never under `blobMin` (its soft edge spans about five LEDs, so no LED is ever colored alone). The white takes `companionShare` unless
+    /// the cover has its own.
+    static let groundWeight = 0.45, blobArea = 0.7, blobMin = 0.3
+    /// Blobs are feathered: their Gaussian runs `feather` × the radius, so a blob's color fades
+    /// in and out over several LEDs as it moves. On top, no LED's color may change faster than
+    /// `colorRate` (OKLab distance per second): however fast a blob is kicked, each LED blends
+    /// over to its new color (2026-10-27: hard-edged blobs made single LEDs switch at once).
+    static let feather = 1.4, colorRate = 1.2
+    static let companionShare = 0.15
+    /// Motion: each blob is pushed along a heading turning at `turnRate` rad/s, by `wanderCalm`
+    /// + `wanderRhythm`·intensity; blobs closer than `apart` repel (`repel`); soft walls
+    /// (`wallSpring`) start `wallMargin` in from the edge, so a blob can reach the edge but not
+    /// leave — its center never comes closer than `blobInset` to the edge (past a corner it would
+    /// color the corner LED alone); speed is damped with time constant `damping` and capped at `maxSpeed`. A heavy
+    /// kick of strength s adds `kickSpeed`·s toward its target. Paused, blobs drift as at
+    /// intensity `pauseDrift`.
+    static let turnRate = 0.4, wanderCalm = 0.08, wanderRhythm = 0.12
+    static let apart = 0.35, repel = 0.02, wallSpring = 6.0, wallMargin = 0.12
+    static let damping = 0.9, maxSpeed = 1.5, kickSpeed = 0.9, pauseDrift = 0.0, blobInset = 0.04
+    /// No lone LED: one whose neighbours are within `loneAlike` of each other (OKLab distance)
+    /// while it is more than `loneApart` from both.
+    static let loneAlike = 0.05, loneApart = 0.1
     /// How much of the chroma an OKLab average loses between two hues is put back.
     static let keepChroma = 0.6
-    /// At a flash's peak the color moves this far toward white.
-    static let bloom = 0.35
 
-    /// Accent spread: a strength-s accent reaches `reachMin` + `reachRange`·s^`reachCurve` laps
-    /// (0.5 = the far side of the ring; a flat-topped profile, so ≥ 0.7 fills the whole ring),
-    /// getting there with time constant `spread` seconds.
+    /// Draw: the blobs shrink by up to `drawShrink`, the light sags by `sag`, the color deepens
+    /// by up to `drawDeepen`. Depth (`drawCalm` + `drawRhythm`·intensity) × `drawGain`, up to 1;
+    /// followed through two low-passes, like the flashes: `drawAttack` in and `drawRelease` out,
+    /// then `drawSmooth` both ways, so it gathers roundly and lets go slowly, never flicking.
+    static let drawShrink = 0.5, sag = 0.3
+    static let drawCalm = 0.35, drawRhythm = 0.65, drawGain = 1.6
+    static let drawAttack = 0.08, drawRelease = 0.45, drawSmooth = 0.1
+    /// Snares come first: a lift holds the draw back by up to `liftHoldsDraw` of its level, so
+    /// a snare landing with a kick reads as the release, not as both cancelling.
+    static let liftHoldsDraw = 0.8
+    /// Color: chroma × `restChroma` at rest. Deepening moves a color toward its most vivid form
+    /// on the LEDs (`MusicGlow.vivid`: same hue, its white taken out), so a pale cover color
+    /// visibly deepens too; a color nearer white than `hueless` deepens toward the main color's
+    /// vivid form. The draw deepens by up to `drawDeepen`, the rebound by `reboundDeepen`.
+    static let restChroma = 0.85, drawDeepen = 0.7, reboundDeepen = 0.4, hueless = 0.15
+    /// Every band places its triggers the same way: new random places on the edge, kept
+    /// `placeGap` laps from the band's lit ones, a set nudged up to `placeJitter` of its spacing.
+    static let placeGap = 0.15, placeJitter = 0.4
+
+    /// Lift: a mid hit of strength s is (`liftFloor` + (1 − `liftFloor`)·s^`liftCurve`)·intensity,
+    /// reaching `reachMin` + `reachRange`·s^`reachCurve` laps round the edge (0.5 = the far side;
+    /// flat-topped, so ≥ 0.7 fills the ring) with time constant `spread`; the blob nearest swells
+    /// by up to `swellGrow`; the color gains `liftChroma`·lift. Above `whiteFrom` the light goes
+    /// toward white, up to `liftWhite` at a full lift: a heavy snare flashes a restrained, bright
+    /// near-white — low in color, high in light — while ordinary ones stay their color
+    /// (2026-10-27: lifts that never whitened had lost the flash's class).
+    static let liftFloor = 0.25, liftCurve = 1.0
+    static let whiteFrom = 0.5, liftWhite = 0.7
     static let reachMin = 0.1, reachRange = 0.65, reachCurve = 2.0, spread = 0.18
+    static let swellGrow = 0.6, liftChroma = 0.2
+    static let liftAttack = 0.035, liftDecay = 0.55
+    /// Glint: size (`glintFloor` + (1 − `glintFloor`)·s)·intensity, `glintWidth` laps wide,
+    /// `glintWhite` of the way to the white, quick (`glintAttack`, `glintDecay`), at most one per
+    /// `glintSpacing` s, never within `glintGap` laps of another lit glint, and only `glintQuiet`
+    /// s after the last kick or mid lift with the draw under `glintQuietDraw`.
+    static let glintFloor = 0.5, glintWidth = 0.03, glintWhite = 0.5
+    static let glintAttack = 0.025, glintDecay = 0.18, glintSpacing = 0.09, glintGap = 0.12
+    static let glintQuiet = 0.6, glintQuietDraw = 0.15
 
-    /// Flash shapes (seconds): accents rise in ≈0.1 s and halve in ≈0.6 s; grid pulses softer.
-    static let accentAttack = 0.035, accentDecay = 0.55
-    static let grooveAttack = 0.07, grooveDecay = 0.45
-    /// Blob speed factor: `flowCalm` with no rhythm, up to `flowCalm + flowRhythm` at full
-    /// intensity, plus `flowSurge` per unit of recent accents; eased with time constant `flowEase`.
-    static let flowCalm = 0.6, flowRhythm = 0.4, flowSurge = 0.5, flowEase = 1.2
-    /// Recent-accent surge: each accent adds its strength · `surgeGain`, decaying over `surgeDecay`.
-    static let surgeGain = 0.35, surgeDecay = 1.5
+    /// Rebound after the draw: a follower that keeps the draw's peaks and lets go over
+    /// `reboundFollow` s; how far it stands above the draw (×`reboundGain`, up to 1) grows the
+    /// blobs by `reboundGrow`, deepens the colors (`reboundDeepen`) and brightens by `reboundLift`.
+    static let reboundFollow = 0.7, reboundGain = 2.5
+    static let reboundGrow = 0.3, reboundLift = 0.12
+
     static let loudnessEase = 0.35, intensityEase = 0.6
-    /// Sparks: envelope shape (fade in ≈0.3 s, out over ≈0.5 s), least time between two, peak size,
-    /// and how far toward white they lift the color.
-    static let sparkAttack = 0.08, sparkDecay = 0.45, sparkSpacing = 0.12, sparkSize = 0.65, sparkWhite = 0.45
     /// Paused: a breath around the lowest base the music ever plays at (`playingFloor`, and
-    /// `barCalm` for the bars) — the light stays, only the music's movement stops —
-    /// ± `pauseBreath` every `pausePeriod` s, blobs at `pauseFlow` speed; eased in over
-    /// `pauseEase` s and back out over `resumeEase` s.
-    static let pauseBreath = 0.04, pausePeriod = 6.0, pauseFlow = 0.12
+    /// `barCalm` for the bars) ± `pauseBreath` every `pausePeriod` s; eased in over `pauseEase`
+    /// s and back out over `resumeEase` s.
+    static let pauseBreath = 0.04, pausePeriod = 6.0
     static let pauseEase = 0.8, resumeEase = 0.4
-    /// A new album's colors blend in over this long.
+    /// A new album's colors take over the canvas over about this long.
     static let paletteFade = 2.5
+
+    static func blobRadius(share: Double) -> Double {
+        max(blobMin, (blobArea * share / .pi).squareRoot())
+    }
 
     static func base(loudness: Double, intensity: Double) -> Double {
         calm - dip * intensity + breath * (loudness - 0.5)
@@ -73,23 +124,27 @@ struct GlowBudget {
         barCalm + barBreath * loudness * intensity
     }
 
-    static func accent(strength: Double, intensity: Double) -> Double {
-        (accentFloor + (1 - accentFloor) * pow(min(1, max(0, strength)), accentCurve)) * intensity
+    static func lift(strength: Double, intensity: Double) -> Double {
+        (liftFloor + (1 - liftFloor) * pow(min(1, max(0, strength)), liftCurve)) * intensity
+    }
+
+    static func glint(strength: Double, intensity: Double) -> Double {
+        (glintFloor + (1 - glintFloor) * min(1, max(0, strength))) * intensity
     }
 
     static func reach(strength: Double) -> Double {
         reachMin + reachRange * pow(min(1, max(0, strength)), reachCurve)
     }
 
-    /// How much of an accent reaches a point `distance` laps from where it started, `age` s in.
+    static func drawDepth(intensity: Double) -> Double {
+        drawCalm + drawRhythm * intensity
+    }
+
+    /// How much of a lift reaches a point `distance` laps from where it started, `age` s in.
     static func spreadProfile(distance: Double, reach: Double, age: Double) -> Double {
         let width = 0.04 + reach * (1 - exp(-age / spread))
         let x = distance / width
         return exp(-x * x * x * x)
-    }
-
-    static func blobProfile(_ weight: Double) -> Double {
-        blobFloor + (1 - blobFloor) * pow(weight, blobCurve)
     }
 
     /// The lowest base while playing: full intensity, silence.
@@ -103,9 +158,9 @@ struct GlowBudget {
         barCalm + pauseBreath * sin(2 * .pi * time / pausePeriod)
     }
 
-    static func brightness(base: Double, accent: Double, groove: Double) -> Double {
-        let flashes = screen(accent, groove)
-        return min(1, max(0, base + (1 - base) * flashes))
+    /// A level with flashes screened on top: never below the level, never past 1.
+    static func brightness(base: Double, flash: Double) -> Double {
+        min(1, max(0, base + (1 - base) * min(1, max(0, flash))))
     }
 
     static func screen(_ a: Double, _ b: Double) -> Double {

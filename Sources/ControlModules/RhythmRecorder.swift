@@ -23,12 +23,13 @@ final class RhythmRecorder: @unchecked Sendable {
         return until != nil
     }
 
-    func start(seconds: Double, frameRate: Double) {
+    /// Starts recording; `note` (what is playing, from where) goes at the top of the trace.
+    func start(seconds: Double, frameRate: Double, note: String? = nil) {
         lock.lock()
         defer { lock.unlock() }
         guard until == nil else { return }
         self.frameRate = frameRate
-        lines = [RhythmTrace.header(frameRate: frameRate)]
+        lines = [RhythmTrace.header(frameRate: frameRate)] + (note.map { [RhythmTrace.noteLine($0)] } ?? [])
         until = ProcessInfo.processInfo.systemUptime + seconds
         log.notice("Recording rhythm trace for \(Int(seconds)) s")
     }

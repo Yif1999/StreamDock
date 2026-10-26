@@ -12,6 +12,7 @@
 //   dock-probe ledbench [seconds]  light-strip frames at 60 Hz: dropped frames and send lateness
 //   dock-probe ledwalk [rate…]  one lit LED walking the ring at each rate, for a slow-motion video
 //   dock-probe ledscan <video> [rate…]  read an ledwalk video: frames the strip actually showed
+//   dock-probe bandcompare <trace>  current vs proposed spectrum split for kick / snare / cymbals
 //   dock-probe hookpreview     what loading the Codex / Claude hooks would write (writes nothing)
 
 import AppKit
@@ -475,12 +476,13 @@ case "canwrite":
 case "palette":
     let path = arguments.dropFirst().first ?? ""
     guard let data = FileManager.default.contents(atPath: path) else { print("cannot read \(path)"); break }
-    print(ArtworkPalette.colors(from: data).map(\.hex).joined(separator: " "))
+    print(ArtworkPalette.colors(from: data).map { "\($0.color.hex) \(Int(($0.share * 100).rounded()))%" }.joined(separator: " "))
 case "glowsim":
     // dock-probe glowsim <rhythm trace> <out> <#RRGGBB ...>: the light show for a recorded trace.
     let input = arguments.dropFirst().first ?? ""
     let output = arguments.dropFirst(2).first ?? ""
-    let palette = arguments.dropFirst(3).map { RGB(hex: $0) }
+    let colors = arguments.dropFirst(3).map { RGB(hex: $0) }
+    let palette = colors.map { Swatch($0, share: 1 / Double(colors.count)) }
     guard let text = try? String(contentsOfFile: input, encoding: .utf8), let trace = RhythmTrace(text: text), !palette.isEmpty else {
         print("usage: dock-probe glowsim <rhythm trace> <out> <#RRGGBB ...>")
         break
@@ -488,6 +490,57 @@ case "glowsim":
     let lines = GlowReplay.replay(trace: trace, palette: palette)
     try lines.joined(separator: "\n").write(toFile: output, atomically: true, encoding: .utf8)
     print("wrote \(lines.count) frames to \(output)")
+case "bandcompare":
+    // dock-probe bandcompare <rhythm trace>: the current split of the spectrum against the
+    // proposed one (see `BandComparison`) on a trace recorded with detail bands.
+    guard let text = try? String(contentsOfFile: arguments.dropFirst().first ?? "", encoding: .utf8),
+          let trace = RhythmTrace(text: text), let result = BandComparison.run(trace) else {
+        print("usage: dock-probe bandcompare <rhythm trace with detail bands>")
+        break
+    }
+    // Song time: the note says how far into the track it was at some uptime.
+    var offset = 0.0
+    if let note = trace.notes.first, let range = note.range(of: #"at uptime ([0-9.]+) the track was ([0-9.\-]+) s in"#, options: .regularExpression) {
+        let numbers = note[range].split(separator: " ").compactMap { Double($0) }
+        if numbers.count == 2, numbers[1] >= 0 { offset = numbers[1] - numbers[0] }
+        print("note: \(note)")
+    }
+    func song(_ t: Double) -> String { let s = t + offset; return String(format: "%d:%04.1f", Int(s) / 60, s.truncatingRemainder(dividingBy: 60)) }
+    let minutes = (result.end - result.start) / 60
+    let tempo = result.bpm.map { BandComparison.refined($0, by: result.current.kick.times) }
+    print(String(format: "%.0f s recorded (%@ – %@), tempo %@ (analyzer %@)", result.end - result.start, song(result.start), song(result.end),
+                 tempo.map { String(format: "%.2f BPM", $0) } ?? "not locked", result.bpm.map { String(format: "%.1f", $0) } ?? "-"))
+    for (label, set) in [("current", result.current), ("proposed", result.proposed)] {
+        print("\n== \(label)")
+        for stream in [set.kick, set.snare, set.cymbal] {
+            print(String(format: "  %-28@ %4d  (%.0f/min)", stream.name as NSString, stream.times.count, Double(stream.times.count) / minutes))
+        }
+        let snare = set.snare.times
+        print(String(format: "  snares landing with a kick (±40 ms): %.0f%%", BandComparison.matched(snare, in: result.proposed.kick.times, window: 0.04) * 100))
+        if let bpm = tempo {
+            print(String(format: "  snare gaps of 2 beats: %.0f%%, of 1 beat: %.0f%%", BandComparison.regular(snare, bpm: bpm, beats: 2) * 100, BandComparison.regular(snare, bpm: bpm, beats: 1) * 100))
+            for stream in [set.kick, set.snare, set.cymbal] {
+                let two = BandComparison.locking(stream.times, bpm: bpm, beats: 2), one = BandComparison.locking(stream.times, bpm: bpm, beats: 1)
+                print(String(format: "  %-28@ locking to 2 beats %.2f, to 1 beat %.2f", stream.name as NSString, two.strength, one.strength))
+                // Where in a two-beat cycle they fall: 16 slots (eighth-of-a-beat), counts as bars.
+                let period = 120 / bpm
+                var slots = [Int](repeating: 0, count: 16)
+                for t in stream.times { slots[Int((t / period - (t / period).rounded(.down)) * 16) % 16] += 1 }
+                let top = max(1, slots.max()!)
+                print("      " + slots.map { String(" ▁▂▃▄▅▆▇█"[String.Index(utf16Offset: $0 * 8 / top, in: " ▁▂▃▄▅▆▇█")]) }.joined() + "  (two beats, eighth-beat slots; peak \(top))")
+            }
+        }
+    }
+    let current = result.current.snare.times, proposed = result.proposed.snare.times
+    print(String(format: "\nproposed snares also found by current: %.0f%%; current mid lifts that are proposed snares: %.0f%%",
+                 BandComparison.matched(proposed, in: current) * 100, BandComparison.matched(current, in: proposed) * 100))
+    print("\nper 10 s (song time): current mid lifts / proposed snares / proposed cymbals")
+    var window = result.start
+    while window < result.end {
+        let inside = { (list: [Double]) in list.filter { $0 >= window && $0 < window + 10 }.count }
+        print(String(format: "  %@  %3d / %3d / %3d", song(window), inside(current), inside(proposed), inside(result.proposed.cymbal.times)))
+        window += 10
+    }
 case "rhythm-eval":
     // dock-probe rhythm-eval <rhythm trace>: replays the analyzer and scores it against the taps.
     guard let text = try? String(contentsOfFile: arguments.dropFirst().first ?? "", encoding: .utf8),
