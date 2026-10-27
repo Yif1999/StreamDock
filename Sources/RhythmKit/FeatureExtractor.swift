@@ -18,12 +18,15 @@ public final class FeatureExtractor {
     ]
     /// Finer bands, recorded alongside for offline study of how to split the spectrum
     /// (`BandComparison`): kick and bass, a snare's body, the middle, a snare's wires and crack,
-    /// cymbals. Not used by the live analysis.
+    /// cymbals. Not used by the live analysis, so only worked out while `computesDetail` (a trace
+    /// recording).
     public static let detailEdges: [ClosedRange<Double>] = [30...150, 150...400, 400...2000, 2000...6000, 6000...16000]
     /// Log compression strength, Y = log(1 + γ·|X|).
     static let compression: Float = 1000
 
     public let sampleRate: Double
+    /// Whether frames carry the detail bands (`detailEdges`).
+    public var computesDetail = true
     public var frameRate: Double { sampleRate / Double(Self.hopSize) }
 
     private let log2n = vDSP_Length(10)
@@ -120,7 +123,7 @@ public final class FeatureExtractor {
             loudness[band] = min(1, loudnessScale[band]!.normalize(rms, dt: dt))
         }
         var detail: [Double] = [], detailRaw: [Double] = []
-        if let previousLog, let previousMagnitudes {
+        if computesDetail, let previousLog, let previousMagnitudes {
             for (index, bins) in detailBins.enumerated() {
                 var rise: Float = 0, linearRise: Float = 0
                 for bin in bins {

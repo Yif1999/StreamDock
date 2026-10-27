@@ -30,8 +30,8 @@ public enum BandComparison {
         for (_, event) in replay.events {
             switch event {
             case .kick(let time, _): kicks.append(time)
-            case .lift(let time, .mid, _): mids.append(time)
-            case .lift(let time, _, _): highs.append(time)
+            case .lift(let time, .mid, _, _): mids.append(time)
+            case .lift(let time, _, _, _): highs.append(time)
             default: break
             }
         }

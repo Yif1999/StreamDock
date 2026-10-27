@@ -3,6 +3,19 @@ import Testing
 @testable import DockCore
 
 struct LEDOutputTests {
+    /// Dim, a pale color keeps its small channels lit — never rounded off into its pure hue —
+    /// while a pure color's missing channels stay off.
+    @Test func dimColorsKeepTheirSmallChannels() {
+        var output = LEDOutput()
+        let dim = 0.15   // the brightest channel ≈ 4/255
+        let pale = output.render([LightPixel(channels: (1, 0.1, 0.1), level: dim)])[0]
+        #expect(pale.red >= 1 && pale.green >= 1 && pale.blue >= 1, "\(pale)")
+        let pure = output.render([LightPixel(channels: (1, 0, 0), level: dim)])[0]
+        #expect(pure.red >= 1 && pure.green == 0 && pure.blue == 0, "\(pure)")
+        let off = output.render([LightPixel(channels: (1, 0.1, 0.1), level: 0)])[0]
+        #expect(off.red == 0 && off.green == 0 && off.blue == 0)
+    }
+
     /// A value hovering between two 8-bit steps at the dim end must not flicker.
     @Test func dimLightDoesNotFlicker() {
         var output = LEDOutput()

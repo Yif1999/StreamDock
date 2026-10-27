@@ -3,26 +3,31 @@ import Foundation
 import RhythmKit
 
 /// Which parts of the music light show play — all of them, or one alone (tests check each
-/// effect on its own). The blobs always move with the music, so a part alone looks as it does
-/// with the rest.
-enum MusicGlowLayer: Sendable {
+/// effect on its own; 律动可视化 previews each on the strip). The blobs always drift; `flow` is
+/// that alone, `draw` adds the low end's pull, `lift` the mid lifts, `high` the glints.
+public enum MusicGlowLayer: String, CaseIterable, Sendable {
     case all, flow, draw, lift, high
 }
 
 /// A Sound Glow–style light show driven by RhythmKit (see docs/rhythm.md), drawn on a square
-/// canvas the size of the base, seen from above: the main color fills it, and soft blobs of
-/// the cover's colors (and a white) drift about inside; each LED shows the canvas where it sits
-/// (`LightLayout.position`) — the ring its edge, the short bars two points inside. It makes no
-/// rhythm decisions of its own; it turns what the audio side reports into light:
+/// canvas the size of the base, seen from above: a white ground, the cover's other colors as
+/// soft blobs drifting on it, and over them one big soft blob of the main color; each LED shows
+/// the canvas where it sits (`LightLayout.position`) — the ring its edge, the short bars two
+/// points inside. It makes no rhythm decisions of its own; it turns what the audio side reports
+/// into light:
 ///
-/// - calm, the blobs drift slowly and the colors well up and ebb along the edge;
-/// - heavy kick → a blob is kicked toward a new place on the edge, washing it with its color;
-/// - low draw (kick and bass) is the "in": the blobs shrink back, the light dims and the color
-///   deepens; letting go, they swell a little past rest and settle;
-/// - mid hit is the "out": the light brightens from a new place on the edge outward and the blob
-///   nearest it swells (snares come first: a lift holds the draw back);
+/// - calm, the main blob is big and wanders slowly round the middle, so most of the ring takes
+///   its color and the far side shows the white and the other colors rolling;
+/// - low draw (kick and bass) pulls the main blob in: it shrinks and is drawn onto a place on
+///   the edge, steadily, as long as the low end draws, uncovering the white and the other
+///   colors; the light dims and the colors deepen; letting go, it swells back and returns;
+/// - mid hit: the light brightens from a new place on the edge outward — with the low end
+///   drawing, in the colors' own hues at full strength; with it quiet, a heavy hit flashes
+///   near-white.
+///   Mids never move the blobs; only the low end does;
 /// - high hit with the low and mid quiet → a crisp whitish glint on the edge.
-/// Paused, it settles into a slow, dim breath.
+/// Paused, it settles into a slow, dim breath, the main color over the ground again and its
+/// blob down to its share, so every cover color shows.
 ///
 /// How bright each part may get and how fast anything may change is `GlowBudget`'s job alone;
 /// colors blend in OKLab (`OKLab`), and `LEDOutput` turns perceived brightness into LED values.
@@ -33,10 +38,10 @@ final class MusicGlow: LightAnimation {
     /// False while Music is paused: the glow eases into a slow breath and back. Paused is
     /// still an active light (it is showing the music), so `isActive` stays true.
     var playing = true
-    /// Which effects play (all, except in tests); read each frame.
-    var layer: () -> MusicGlowLayer = { .all }
+    /// Which effects play (all, unless previewing one in 律动可视化 or testing); read each frame.
+    var layer: () -> MusicGlowLayer = { GlowScope.shared.layer }
 
-    /// A soft disc of one color on the canvas, moving.
+    /// A soft disc of one of the other cover colors on the canvas, drifting.
     struct Blob {
         var color: OKLab
         var share: Double
@@ -44,22 +49,38 @@ final class MusicGlow: LightAnimation {
         var vx = 0.0, vy = 0.0
         /// Where its idle wandering heads, turning slowly (radians).
         var heading: Double
-        /// Mid lifts landing near it swell it.
-        var swell = FlashEnvelope(attack: GlowBudget.liftAttack, decay: GlowBudget.liftDecay)
+        /// Where it is in the shuffle (radians): its depth is the sine — in front at the top,
+        /// behind the others at the bottom.
+        var shuffle: Double
+        var depth: Double { sin(shuffle) }
+    }
+
+    /// The main color's blob: at rest big, wandering round the middle (`angle`, `offset` from
+    /// the centre); the low end pulls it small onto `edge`, the place on the edge it faces —
+    /// which drifts along the edge as the blob wanders.
+    struct Main {
+        var color: OKLab
+        var share: Double
+        var angle = 0.0
+        var edge = (x: 0.0, y: 0.5)
+        var x = 0.5, y = 0.5, radius = 0.5
     }
 
     /// One lift, spreading round the edge toward `reach` from where it landed (laps).
     private struct Ripple {
         let origin: Double
         let reach: Double
+        /// A heavy hit's lift (flashes); the rest only glow, more saturated.
+        let heavy: Bool
         var age = 0.0
         var envelope = FlashEnvelope(attack: GlowBudget.liftAttack, decay: GlowBudget.liftDecay)
     }
 
     private var swatches: [(color: OKLab, share: Double)]
-    /// The canvas: its ground (the main color) and the blobs on it.
+    /// The canvas: its ground (white), the other colors' blobs on it, the main blob over them.
     private var ground: OKLab
     private(set) var blobs: [Blob] = []
+    private(set) var main: Main
 
     private var lastTime: TimeInterval?
     private var loudness: Double?
@@ -79,7 +100,7 @@ final class MusicGlow: LightAnimation {
     private var glints: [(place: Double, age: Double, envelope: FlashEnvelope)] = []
     private var pendingGlints: [Double] = []
     private var lastGlint: TimeInterval = -.infinity
-    /// The last kick or mid lift heard: glints only play once the low and mid have gone quiet.
+    /// The last heavy kick or mid lift heard: glints only play once the low and mid have gone quiet.
     private var lastLowMid: TimeInterval = -.infinity
     /// Where effects land: varied but reproducible (the same music gives the same light).
     private var random = SeededRandom(seed: 0x5EED)
@@ -91,6 +112,7 @@ final class MusicGlow: LightAnimation {
     init(palette: [Swatch]) {
         swatches = Self.normalized(palette)
         ground = swatches[0].color
+        main = Main(color: swatches[0].color, share: swatches[0].share)
         blobs = makeBlobs()
     }
 
@@ -98,39 +120,44 @@ final class MusicGlow: LightAnimation {
         let next = Self.normalized(newPalette)
         guard next.map(\.color) != swatches.map(\.color) || next.map(\.share) != swatches.map(\.share) else { return }
         swatches = next
-        // The blobs stay where they are and take on the new colors gradually (see `frame`);
-        // a different number of colors starts a fresh set, eased in the same way.
+        // The blobs stay where they are and take on the new colors gradually (see `frame`). A
+        // different number of colors keeps the blobs there were, moving as they were; one added
+        // starts as the ground and takes its color over the same fade.
         let targets = members()
         if targets.count != blobs.count {
             let old = blobs
             blobs = makeBlobs()
-            for index in blobs.indices where index < old.count { blobs[index].color = old[index].color }
+            for index in blobs.indices {
+                if index < old.count { blobs[index] = old[index] } else { blobs[index].color = ground }
+            }
         }
     }
 
+    /// The cover's colors with shares summing to 1, the main color first: the biggest one that
+    /// has a hue (OKLab chroma at least `mainChroma`) — a white or grey never leads, however
+    /// much of the cover it takes; only a cover with no hue at all has a white main color.
     private static func normalized(_ palette: [Swatch]) -> [(color: OKLab, share: Double)] {
         let list = palette.isEmpty ? [Swatch(.white, share: 1)] : palette
         let sum = list.reduce(0) { $0 + max(0, $1.share) }
-        return list.map { (OKLab(srgb: $0.color), sum > 0 ? max(0, $0.share) / sum : 1 / Double(list.count)) }
+        var colors = list.map { (color: OKLab(srgb: $0.color), share: sum > 0 ? max(0, $0.share) / sum : 1 / Double(list.count)) }
+        if let main = colors.indices.filter({ colors[$0].color.chroma >= GlowBudget.mainChroma }).max(by: { colors[$0].share < colors[$1].share }) {
+            colors.insert(colors.remove(at: main), at: 0)
+        }
+        return colors
     }
 
-    /// The blobs' colors and shares: every cover color, and a white (`companionShare`) unless the
-    /// cover has its own.
+    /// The drifting blobs' colors and shares: every cover color but the main one.
     private func members() -> [(color: OKLab, share: Double)] {
-        var list = swatches
-        if !swatches.contains(where: { $0.color.chroma < 0.04 && $0.color.l > 0.8 }) {
-            list = list.map { ($0.color, $0.share * (1 - GlowBudget.companionShare)) }
-            list.append((Self.companion(swatches.map(\.color)), GlowBudget.companionShare))
-        }
-        return list
+        Array(swatches.dropFirst())
     }
 
     private func makeBlobs() -> [Blob] {
         members().enumerated().map { index, member in
-            let angle = 2 * .pi * Double(index) / Double(max(1, swatches.count + 1))
+            let angle = 2 * .pi * Double(index) / Double(max(1, swatches.count))
             return Blob(color: member.color, share: member.share,
                         x: 0.5 + 0.25 * cos(angle), y: 0.5 + 0.25 * sin(angle),
-                        heading: Double.random(in: 0..<(2 * .pi), using: &random))
+                        heading: Double.random(in: 0..<(2 * .pi), using: &random),
+                        shuffle: 2 * .pi * Double(index) / Double(max(1, swatches.count - 1)))
         }
     }
 
@@ -153,24 +180,27 @@ final class MusicGlow: LightAnimation {
         let rawLoudness = (input?.snapshot.loudness.low ?? 0.3 + 0.15 * sin(2 * .pi * time / 3)) * (playing ? 1 : 0)
         let loudness = Self.ease(self.loudness ?? rawLoudness, toward: rawLoudness, dt: dt, over: GlowBudget.loudnessEase)
         self.loudness = loudness
-        // The draw: two low-passes, quick in and slower out; a lift showing holds it back (snares first).
+        // The draw: two low-passes, quick in and slower out. Only the low end moves it.
         let wantedDraw = shows(.draw) && playing ? min(1, (input?.snapshot.lowDraw ?? 0) * GlowBudget.drawDepth(intensity: intensity) * GlowBudget.drawGain) : 0
-        let lifting = ripples.reduce(0.0) { max($0, $1.envelope.level) }
-        let heldDraw = wantedDraw * (1 - GlowBudget.liftHoldsDraw * min(1, lifting))
-        pull = Self.ease(pull, toward: heldDraw, dt: dt, over: heldDraw > pull ? GlowBudget.drawAttack : GlowBudget.drawRelease)
+        pull = Self.ease(pull, toward: wantedDraw, dt: dt, over: wantedDraw > pull ? GlowBudget.drawAttack : GlowBudget.drawRelease)
         draw = Self.ease(draw, toward: pull, dt: dt, over: GlowBudget.drawSmooth)
         held = max(draw, Self.ease(held, toward: draw, dt: dt, over: GlowBudget.reboundFollow))
         let rebound = min(1, GlowBudget.reboundGain * (held - draw))
 
         for event in input?.events ?? [] where playing {
             switch event {
-            case .kick(_, let strength):
+            case .kick:
                 lastLowMid = time
-                kick(strength: strength * intensity)
-            case .lift(_, .mid, let strength):
-                lastLowMid = time
-                if shows(.lift) { addLift(size: GlowBudget.lift(strength: strength, intensity: intensity), reach: GlowBudget.reach(strength: strength)) }
-            case .lift(_, _, let strength):
+            case .lift(_, .mid, let strength, let heavy):
+                // Only the heavy hits are the "obvious rhythm" that holds the glints back.
+                if heavy { lastLowMid = time }
+                guard shows(.lift) else { break }
+                if heavy {
+                    addLift(size: GlowBudget.lift(strength: strength, intensity: intensity), reach: GlowBudget.reach(strength: strength), heavy: true)
+                } else {
+                    addLift(size: GlowBudget.softLift(strength: strength, intensity: intensity), reach: GlowBudget.softReach, heavy: false)
+                }
+            case .lift(_, _, let strength, _):
                 // Cymbals on their own only: with kicks, snares or a drawing bass about, glints are clutter.
                 guard shows(.high), time - lastGlint >= GlowBudget.glintSpacing,
                       time - lastLowMid >= GlowBudget.glintQuiet, draw < GlowBudget.glintQuietDraw else { break }
@@ -194,30 +224,37 @@ final class MusicGlow: LightAnimation {
         pendingGlints.removeAll()
 
         // The canvas: colors ease to the album's (a new album over `paletteFade`), blobs move.
+        // Playing, the ground is white; paused, the main color again.
         let targets = members()
         let colorStep = 1 - exp(-dt / (GlowBudget.paletteFade / 3))
-        ground = ground.mixed(with: swatches[0].color, amount: colorStep)
+        let companion = Self.companion(swatches.map(\.color))
+        ground = ground.mixed(with: companion.mixed(with: swatches[0].color, amount: 1 - presence), amount: colorStep)
+        main.color = main.color.mixed(with: swatches[0].color, amount: colorStep)
+        main.share = swatches[0].share
         for index in blobs.indices where index < targets.count {
             blobs[index].color = blobs[index].color.mixed(with: targets[index].color, amount: colorStep)
             blobs[index].share = targets[index].share
-            blobs[index].swell.advance(dt: dt)
         }
         move(dt: dt, time: time, intensity: intensity * presence + GlowBudget.pauseDrift * (1 - presence))
-        let scale = (1 - GlowBudget.drawShrink * draw) * (1 + GlowBudget.reboundGrow * rebound)
+        moveMain(dt: dt, time: time, intensity: intensity * presence, rebound: rebound)
 
         let base = GlowBudget.base(loudness: loudness, intensity: intensity) * (1 - GlowBudget.sag * draw)
         let pause = GlowBudget.pauseBrightness(at: time)
         let deepen = min(1, (GlowBudget.drawDeepen * draw + GlowBudget.reboundDeepen * rebound) * presence)
-        let mainVivid = Self.vivid(swatches[0].color.ledChannels)
-        let companion = Self.companion(swatches.map(\.color))
-        func finish(_ color: OKLab, lift: Double, glint: Double) -> (Double, Double, Double) {
-            let rich = color.saturated(by: GlowBudget.restChroma + GlowBudget.liftChroma * lift * presence)
-            var channels = Self.mix(rich.ledChannels, Self.vivid(rich.ledChannels) ?? mainVivid ?? rich.ledChannels, deepen)
-            // A heavy lift flashes toward white at its peak; ordinary ones keep their color.
+        func finish(_ color: OKLab, lift: Double, soft: Double, glint: Double) -> (Double, Double, Double) {
+            let rich = color.saturated(by: GlowBudget.restChroma + GlowBudget.liftChroma * GlowBudget.screen(lift, soft) * presence)
+            // Deepening deepens a hue, as far as the color has one: the white the main blob
+            // uncovers stays white, and a color near white deepens only a little.
+            let (vivid, hue) = Self.vivid(rich.ledChannels)
+            var channels = Self.mix(rich.ledChannels, vivid, deepen * hue)
+            // A light hit glows its color more saturated. A heavy one, with the low end drawing,
+            // lights the color's own hue at full strength; with it quiet, it flashes toward white
+            // at its peak.
+            channels = Self.mix(channels, vivid, min(1, GlowBudget.softVivid * soft + GlowBudget.liftVivid * lift * draw) * presence * hue)
             let flash = min(1, max(0, (lift - GlowBudget.whiteFrom) / (1 - GlowBudget.whiteFrom)))
-            channels = Self.mix(channels, companion.ledChannels, GlowBudget.liftWhite * flash * flash * (3 - 2 * flash) * presence)
+            channels = Self.mix(channels, companion.ledChannels, GlowBudget.liftWhite * flash * flash * (3 - 2 * flash) * (1 - draw) * presence)
             channels = Self.mix(channels, companion.ledChannels, GlowBudget.glintWhite * glint)
-            return channels
+            return Self.capped(channels)
         }
 
         // Each LED follows the canvas, but never faster than `colorRate`.
@@ -229,105 +266,166 @@ final class MusicGlow: LightAnimation {
         }
         var pixels = Array(repeating: LightPixel.black, count: ledCount)
         var field: [OKLab] = []
+        // Each LED shows the canvas where it sits, spread a little into its neighbours, as the
+        // light guide spreads it: however the colors meet on the canvas, neighbours stay close.
+        let sampled = ring.map { canvas(at: LightLayout.position($0)) }
+        let spread = sampled.indices.map { slot in
+            let before = sampled[(slot + ring.count - 1) % ring.count], after = sampled[(slot + 1) % ring.count]
+            let s = GlowBudget.ledSpread
+            return OKLab(l: sampled[slot].l * (1 - 2 * s) + (before.l + after.l) * s,
+                         a: sampled[slot].a * (1 - 2 * s) + (before.a + after.a) * s,
+                         b: sampled[slot].b * (1 - 2 * s) + (before.b + after.b) * s)
+        }
+        let heavyRipples = ripples.filter(\.heavy), softRipples = ripples.filter { !$0.heavy }
         for (slot, led) in ring.enumerated() {
             let lap = (Double(slot) + 0.5) / Double(ring.count)
-            let color = follow(slot < shownField.count ? shownField[slot] : nil, canvas(at: LightLayout.position(led), scale: scale))
+            let color = follow(slot < shownField.count ? shownField[slot] : nil, spread[slot])
             field.append(color)
-            let lift = ripples.reduce(0.0) { level, ripple in
-                GlowBudget.screen(level, ripple.envelope.level * GlowBudget.spreadProfile(distance: Self.ringDistance(lap, ripple.origin), reach: ripple.reach, age: ripple.age))
+            func lifted(_ ripples: [Ripple]) -> Double {
+                ripples.reduce(0.0) { level, ripple in
+                    GlowBudget.screen(level, ripple.envelope.level * GlowBudget.spreadProfile(distance: Self.ringDistance(lap, ripple.origin), reach: ripple.reach, age: ripple.age))
+                }
             }
+            let lift = lifted(heavyRipples), soft = lifted(softRipples)
             let glint = glints.reduce(0.0) { level, glint in
                 let x = Self.ringDistance(lap, glint.place) / GlowBudget.glintWidth
                 return GlowBudget.screen(level, glint.envelope.level * exp(-x * x))
             }
-            let flashes = GlowBudget.screen(GlowBudget.screen(lift, GlowBudget.reboundLift * rebound), glint)
+            let flashes = GlowBudget.screen(GlowBudget.screen(GlowBudget.screen(lift, soft), GlowBudget.reboundLift * rebound), glint)
             let playingLevel = GlowBudget.brightness(base: base, flash: flashes)
             let level = pause + (playingLevel - pause) * presence
-            pixels[led] = LightPixel(channels: finish(color, lift: lift, glint: glint), level: level)
+            pixels[led] = LightPixel(channels: finish(color, lift: lift, soft: soft, glint: glint), level: level)
         }
         shownField = field
 
-        // Short bars: the canvas along them (level strips), a little dimmer; lit by mid lifts that spread far.
-        let barLift = ripples.reduce(0.0) { GlowBudget.screen($0, $1.envelope.level * min(1, $1.reach / 0.5)) }
-        let barPlaying = GlowBudget.brightness(base: GlowBudget.barBase(loudness: loudness, intensity: intensity) * (1 - GlowBudget.sag * draw), flash: barLift)
+        // Short bars: the canvas along them (level strips), a little dimmer; lit by heavy lifts that spread far.
+        let barLift = ripples.filter(\.heavy).reduce(0.0) { GlowBudget.screen($0, $1.envelope.level * min(1, $1.reach / 0.5)) }
+        let barBase = GlowBudget.barBase(loudness: loudness, intensity: intensity) * (1 - GlowBudget.sag * draw)
         let barPause = GlowBudget.barPauseBrightness(at: time)
-        let barLevel = barPause + (barPlaying - barPause) * presence
         for bar in [LightLayout.leftBar, LightLayout.rightBar] where bar < ledCount {
             let center = LightLayout.position(bar), half = LightLayout.barLength / 2
-            let along = [-half, 0, half].map { canvas(at: (center.x + $0, center.y), scale: scale) }
+            let along = [-half, 0, half].map { canvas(at: (center.x + $0, center.y)) }
             let color = follow(barColors[bar], OKLab.blend(along, weights: [1, 1, 1], keepChroma: GlowBudget.keepChroma))
             barColors[bar] = color
-            pixels[bar] = LightPixel(channels: finish(color, lift: barLift, glint: 0), level: barLevel)
+            let barPlaying = GlowBudget.brightness(base: barBase, flash: barLift)
+            pixels[bar] = LightPixel(channels: finish(color, lift: barLift, soft: 0, glint: 0), level: barPause + (barPlaying - barPause) * presence)
+        }
+        if GlowScope.shared.watching {
+            capture(time: time, pixels: pixels, input: input, rebound: rebound)
         }
         return pixels
     }
 
-    /// The canvas color at a point: the ground, with each blob a soft disc over it (OKLab).
-    func canvas(at point: (x: Double, y: Double), scale: Double) -> OKLab {
-        var colors = [ground], weights = [GlowBudget.groundWeight]
-        for blob in blobs {
-            let radius = GlowBudget.feather * max(GlowBudget.blobMin, GlowBudget.blobRadius(share: blob.share) * scale * (1 + GlowBudget.swellGrow * blob.swell.level))
-            let dx = point.x - blob.x, dy = point.y - blob.y
-            colors.append(blob.color)
-            weights.append(exp(-(dx * dx + dy * dy) / (radius * radius)) + 1e-6)
+    /// What the 律动可视化 window shows: the canvas, the blobs, the LEDs and the low end.
+    private func capture(time: TimeInterval, pixels: [LightPixel], input: (events: [RhythmEvent], snapshot: RhythmSnapshot)?, rebound: Double) {
+        let n = GlowScope.grid
+        let canvas = (0..<n * n).map { index in
+            self.canvas(at: ((Double(index % n) + 0.5) / Double(n), (Double(index / n) + 0.5) / Double(n))).srgb
         }
-        return OKLab.blend(colors, weights: weights, keepChroma: GlowBudget.keepChroma)
+        let blobs = [GlowScope.Blob(x: main.x, y: main.y, radius: main.radius, vx: 0, vy: 0, main: true, depth: 1, color: main.color.srgb)]
+            + blobs.map { blob in
+                GlowScope.Blob(x: blob.x, y: blob.y, radius: radius(of: blob) * (1 + GlowBudget.depthGrow * blob.depth), vx: blob.vx, vy: blob.vy, main: false, depth: blob.depth, color: blob.color.srgb)
+            }
+        let leds = pixels.indices.map { led in
+            let p = LightLayout.position(led), pixel = pixels[led]
+            let drive = LEDOutput.drive(pixel.level)
+            let color = RGB(SRGB.encode(pixel.channels.0 * drive), SRGB.encode(pixel.channels.1 * drive), SRGB.encode(pixel.channels.2 * drive))
+            return (x: p.x, y: p.y, color: color, bar: !LightLayout.ring.contains(led))
+        }
+        let lifts = ripples.map { ripple in
+            let p = LightLayout.edgePoint(lap: ripple.origin)
+            return (x: p.x, y: p.y, level: ripple.envelope.level)
+        }
+        GlowScope.shared.record(GlowScope.Frame(
+            time: time, canvas: canvas, blobs: blobs, leds: leds, lifts: lifts,
+            anchor: draw > 0.02 ? main.edge : nil,
+            draw: draw, rebound: rebound, lowDraw: input?.snapshot.lowDraw ?? 0,
+            intensity: intensity ?? 0
+        ), events: input?.events ?? [])
     }
 
-    /// The blobs drift: each pushed gently along a slowly turning heading (harder the livelier the
-    /// music), kept apart from each other, held inside the base by soft walls, and damped.
+    /// Where a blob's weight on the canvas falls to 1/e.
+    private func radius(of blob: Blob) -> Double {
+        GlowBudget.blobRadius(share: blob.share)
+    }
+
+    /// The canvas color at a point: the ground, each other color a soft disc over it, and the
+    /// main blob laid over them all — every disc with the same soft edge (`GlowBudget.cover`),
+    /// in OKLab.
+    func canvas(at point: (x: Double, y: Double)) -> OKLab {
+        var colors = [ground], weights = [GlowBudget.groundWeight]
+        for blob in blobs {
+            // The one in front of the shuffle covers the rest, a little bigger; the ones behind fade.
+            let front = exp(GlowBudget.depthWeight * blob.depth)
+            let radius = radius(of: blob) * (1 + GlowBudget.depthGrow * blob.depth)
+            colors.append(blob.color)
+            weights.append(GlowBudget.blobPeak * front * GlowBudget.cover(distance: hypot(point.x - blob.x, point.y - blob.y), radius: radius) + 1e-6)
+        }
+        let under = OKLab.blend(colors, weights: weights, keepChroma: GlowBudget.keepChroma)
+        let cover = GlowBudget.cover(distance: hypot(point.x - main.x, point.y - main.y), radius: main.radius)
+        return OKLab.blend([under, main.color], weights: [1 - cover + 1e-6, cover + 1e-6], keepChroma: GlowBudget.keepChroma)
+    }
+
+    /// The main blob. At rest it wanders round the middle, `mainOffset` (± `mainOffsetBreath`)
+    /// from the centre, turning at up to `mainTurnCalm` + `mainTurnRhythm`·intensity rad/s and
+    /// now and then the other way. The draw pulls it, as far as it draws, out onto the place on
+    /// the edge it faces (straight out from the centre), shrinking from `mainRest` to
+    /// `mainTight`; the rebound swells it by `reboundGrow`. So the pull follows the edge as the
+    /// blob wanders — the place drifts slowly along the edge, never jumps. Paused, it eases to
+    /// its share's size, so the other colors show.
+    private func moveMain(dt: Double, time: TimeInterval, intensity: Double, rebound: Double) {
+        let turn = (GlowBudget.mainTurnCalm + GlowBudget.mainTurnRhythm * intensity) * sin(2 * .pi * time / GlowBudget.mainTurnPeriod)
+        main.angle += turn * dt
+        let offset = GlowBudget.mainOffset + GlowBudget.mainOffsetBreath * sin(2 * .pi * time / 17)
+        let (c, s) = (cos(main.angle), sin(main.angle))
+        let rest = (x: 0.5 + offset * c, y: 0.5 + offset * s)
+        let reach = 0.5 / max(abs(c), abs(s))
+        main.edge = (0.5 + reach * c, 0.5 + reach * s)
+        main.x = rest.x + (main.edge.x - rest.x) * draw
+        main.y = rest.y + (main.edge.y - rest.y) * draw
+        let playing = (GlowBudget.mainRest + (GlowBudget.mainTight - GlowBudget.mainRest) * draw) * (1 + GlowBudget.reboundGrow * rebound)
+        let paused = GlowBudget.blobRadius(share: main.share)
+        main.radius = paused + (playing - paused) * presence
+    }
+
+    /// The blobs shuffle and glide: they take turns coming to the front, like cards (`shuffle`),
+    /// and each glides along a meandering heading, steered round toward the middle as it
+    /// gets further out and away from its neighbours, its velocity following the heading — wide
+    /// arcs, never a bounce. Faster and twistier the livelier the music.
     private func move(dt: Double, time: TimeInterval, intensity: Double) {
-        let push = GlowBudget.wanderCalm + GlowBudget.wanderRhythm * intensity
-        let decay = exp(-dt / GlowBudget.damping)
+        let speed = GlowBudget.wanderCalm + GlowBudget.wanderRhythm * intensity
+        let meander = GlowBudget.turnCalm + GlowBudget.turnRhythm * intensity
+        let follow = 1 - exp(-dt / GlowBudget.glide)
+        // How far to turn to face `angle`, signed, up to ±π: a blob heading straight out still turns.
+        func toward(_ angle: Double, from heading: Double) -> Double { (angle - heading).remainder(dividingBy: 2 * .pi) }
         for index in blobs.indices {
             var blob = blobs[index]
-            blob.heading += GlowBudget.turnRate * dt * (index % 2 == 0 ? 1 : -1) * (0.7 + 0.1 * Double(index))
-            var fx = push * cos(blob.heading), fy = push * sin(blob.heading)
-            let margin = GlowBudget.wallMargin
-            if blob.x < margin { fx += GlowBudget.wallSpring * (margin - blob.x) }
-            if blob.x > 1 - margin { fx -= GlowBudget.wallSpring * (blob.x - 1 + margin) }
-            if blob.y < margin { fy += GlowBudget.wallSpring * (margin - blob.y) }
-            if blob.y > 1 - margin { fy -= GlowBudget.wallSpring * (blob.y - 1 + margin) }
+            let period = GlowBudget.meanderPeriod * (1 + 0.23 * Double(index))
+            var turn = meander * sin(2 * .pi * time / period + 1.7 * Double(index))
+            let cx = 0.5 - blob.x, cy = 0.5 - blob.y
+            turn += GlowBudget.steer * speed * (cx * cx + cy * cy) * toward(atan2(cy, cx), from: blob.heading)
             for other in blobs.indices where other != index {
                 let dx = blob.x - blobs[other].x, dy = blob.y - blobs[other].y
-                let d2 = max(1e-4, dx * dx + dy * dy)
-                if d2 < GlowBudget.apart * GlowBudget.apart {
-                    fx += GlowBudget.repel * dx / d2
-                    fy += GlowBudget.repel * dy / d2
-                }
+                let near = exp(-(dx * dx + dy * dy) / (GlowBudget.apart * GlowBudget.apart))
+                turn += GlowBudget.apartSteer * near * toward(atan2(dy, dx), from: blob.heading)
             }
-            blob.vx = (blob.vx + fx * dt) * decay
-            blob.vy = (blob.vy + fy * dt) * decay
-            let speed = (blob.vx * blob.vx + blob.vy * blob.vy).squareRoot()
-            if speed > GlowBudget.maxSpeed { blob.vx *= GlowBudget.maxSpeed / speed; blob.vy *= GlowBudget.maxSpeed / speed }
+            blob.heading += min(GlowBudget.maxTurn, max(-GlowBudget.maxTurn, turn)) * dt
+            // It travels where it heads; only its speed eases, so it never skids on past a turn.
+            let current = (blob.vx * blob.vx + blob.vy * blob.vy).squareRoot()
+            let eased = current + (speed - current) * follow
+            blob.vx = eased * cos(blob.heading)
+            blob.vy = eased * sin(blob.heading)
             // Centers stay on the canvas: a blob past a corner would color the corner LED alone.
             let inset = GlowBudget.blobInset
-            blob.x += blob.vx * dt
-            blob.y += blob.vy * dt
-            if blob.x < inset || blob.x > 1 - inset { blob.x = min(1 - inset, max(inset, blob.x)); blob.vx = 0 }
-            if blob.y < inset || blob.y > 1 - inset { blob.y = min(1 - inset, max(inset, blob.y)); blob.vy = 0 }
+            blob.shuffle += 2 * .pi * (GlowBudget.shuffleCalm + GlowBudget.shuffleRhythm * intensity) * dt
+            blob.x = min(1 - inset, max(inset, blob.x + blob.vx * dt))
+            blob.y = min(1 - inset, max(inset, blob.y + blob.vy * dt))
             blobs[index] = blob
         }
     }
 
-    /// A heavy kick sends the blob nearest a new place on the edge toward it.
-    private func kick(strength: Double) {
-        guard strength > 0.01, !blobs.isEmpty else { return }
-        let target = LightLayout.edgePoint(lap: place(count: 1, avoiding: [], gap: 0)[0])
-        let nearest = blobs.indices.min { Self.distance(blobs[$0], target) < Self.distance(blobs[$1], target) }!
-        let dx = target.x - blobs[nearest].x, dy = target.y - blobs[nearest].y
-        let length = max(1e-6, (dx * dx + dy * dy).squareRoot())
-        blobs[nearest].vx += dx / length * GlowBudget.kickSpeed * strength
-        blobs[nearest].vy += dy / length * GlowBudget.kickSpeed * strength
-    }
-
-    private static func distance(_ blob: Blob, _ point: (x: Double, y: Double)) -> Double {
-        ((blob.x - point.x) * (blob.x - point.x) + (blob.y - point.y) * (blob.y - point.y)).squareRoot()
-    }
-
-    /// The one placement rule for every band: each trigger — a kick's target, a mid lift, a
-    /// glint — happens at new places round the edge, picked at random (reproducibly), `count`
-    /// of them about evenly spaced (each nudged up to `placeJitter` of the spacing), kept `gap`
+    /// The one placement rule for every band: each trigger — a mid lift, a glint — happens at
+    /// new places round the edge, picked at random (reproducibly), `count` of them about evenly spaced (each nudged up to `placeJitter` of the spacing), kept `gap`
     /// laps from the places this band still has lit when a few tries allow.
     private func place(count: Int, avoiding lit: [Double], gap: Double) -> [Double] {
         var set: [Double] = []
@@ -342,18 +440,14 @@ final class MusicGlow: LightAnimation {
         return set
     }
 
-    /// A mid lift, at a new place on the edge; the blob nearest it swells.
-    private func addLift(size: Double, reach: Double) {
+    /// A mid lift, at a new place on the edge.
+    private func addLift(size: Double, reach: Double, heavy: Bool) {
         guard size > 0.001 else { return }
         let lit = ripples.filter { $0.envelope.level > 0.1 }.map(\.origin)
-        var ripple = Ripple(origin: place(count: 1, avoiding: lit, gap: GlowBudget.placeGap)[0], reach: reach)
+        var ripple = Ripple(origin: place(count: 1, avoiding: lit, gap: GlowBudget.placeGap)[0], reach: reach, heavy: heavy)
         ripple.envelope.trigger(size)
         ripples.append(ripple)
         if ripples.count > 12 { ripples.removeFirst() }
-        let point = LightLayout.edgePoint(lap: ripple.origin)
-        if let nearest = blobs.indices.min(by: { Self.distance(blobs[$0], point) < Self.distance(blobs[$1], point) }) {
-            blobs[nearest].swell.trigger(size)
-        }
     }
 
     /// A glint, at a new place.
@@ -377,13 +471,26 @@ final class MusicGlow: LightAnimation {
 
     typealias Channels = (Double, Double, Double)
 
-    /// The most vivid form of an LED color: the same hue with its white taken out (the lowest
-    /// channel to 0), or nil for a color too near white to have a hue to deepen.
-    static func vivid(_ c: Channels) -> Channels? {
+    /// The most vivid form of an LED color — the same hue with its white taken out (the lowest
+    /// channel to 0) — and how much hue the color has to deepen, 0...1: none for a white, rising
+    /// smoothly over `GlowBudget.hueFrom`…`hueFull` of (highest − lowest) / highest, so two
+    /// neighbouring LEDs either side of "having a hue" deepen alike, never one to a pure color
+    /// and the other not.
+    static func vivid(_ c: Channels) -> (channels: Channels, hue: Double) {
+        let high = max(c.0, c.1, c.2), low = min(c.0, c.1, c.2), span = high - low
+        guard high > 0, span > 1e-6 else { return (c, 0) }
+        let x = min(1, max(0, (span / high - GlowBudget.hueFrom) / (GlowBudget.hueFull - GlowBudget.hueFrom)))
+        return (((c.0 - low) / span, (c.1 - low) / span, (c.2 - low) / span), x * x * (3 - 2 * x))
+    }
+
+    /// A color no more saturated than `GlowBudget.maxSaturation` — (highest − lowest) / highest
+    /// channel — keeping its hue and its highest channel: past the cap, the other channels are
+    /// raised toward the highest, as if a little white were added.
+    static func capped(_ c: Channels) -> Channels {
         let high = max(c.0, c.1, c.2), low = min(c.0, c.1, c.2)
-        guard high > 0, (high - low) / high >= GlowBudget.hueless else { return nil }
-        let span = high - low
-        return ((c.0 - low) / span, (c.1 - low) / span, (c.2 - low) / span)
+        guard high > 0, (high - low) / high > GlowBudget.maxSaturation else { return c }
+        let keep = GlowBudget.maxSaturation * high / (high - low)
+        return (high - (high - c.0) * keep, high - (high - c.1) * keep, high - (high - c.2) * keep)
     }
 
     static func mix(_ a: Channels, _ b: Channels, _ amount: Double) -> Channels {

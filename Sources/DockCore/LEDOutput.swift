@@ -42,6 +42,11 @@ public struct LEDOutput {
     public static let gamma = 2.2
     public static func drive(_ level: Double) -> Double { pow(min(1, max(0, level)), gamma) }
     static let hysteresis = 0.7
+    /// While an LED is lit, a channel making up at least `keepFrom` of its color never rounds
+    /// down to 0: at the dim end the 8-bit step would drop a color's small channels and leave
+    /// only its pure hue, far more saturated than meant (2026-10-27). A channel the color does
+    /// not have (a pure red's green) stays off.
+    static let keepFrom = 0.02
     private var held: [Double] = []
 
     public mutating func render(_ pixels: [LightPixel], gain: Double = 1) -> [RGB] {
@@ -52,7 +57,12 @@ public struct LEDOutput {
             for channel in 0..<3 where abs(wanted[channel] - held[index * 3 + channel]) >= Self.hysteresis {
                 held[index * 3 + channel] = wanted[channel].rounded()
             }
-            return RGB(UInt8(held[index * 3]), UInt8(held[index * 3 + 1]), UInt8(held[index * 3 + 2]))
+            let proportions = [pixel.channels.0, pixel.channels.1, pixel.channels.2]
+            let lit = (0..<3).contains { held[index * 3 + $0] >= 1 }
+            let out = (0..<3).map { channel in
+                lit && proportions[channel] >= Self.keepFrom ? max(1, held[index * 3 + channel]) : held[index * 3 + channel]
+            }
+            return RGB(UInt8(out[0]), UInt8(out[1]), UInt8(out[2]))
         }
     }
 }

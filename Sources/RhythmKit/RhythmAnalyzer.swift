@@ -18,19 +18,20 @@ public enum RhythmEvent: Sendable, Equatable {
     case accent(time: Double, strength: Double)
     /// Every hit in every band, for secondary effects (blob kicks, sparks).
     case hit(Hit)
-    /// One of the heaviest kicks right now (see `KickDetector`); `strength` 0...1 against the
-    /// song's big kicks of the last minute.
+    /// One of the heaviest low-band hits right now (see `HeavyHits`); `strength` 0...1
+    /// against the low band's big hits of the last minute.
     case kick(time: Double, strength: Double)
-    /// A snare (band `.mid`) or a cymbal (band `.high`) hit, sized against its own band's big
-    /// hits of the last minute (≈1 for a big one; quiet passages give small ones), for the light
-    /// to lift on. Kick or snare is told by `StrikeSorter` — by which band the strike stands out
-    /// in — so both come `StrikeSorter.window` after the strike starts.
-    case lift(time: Double, band: Bands.Band, strength: Double)
+    /// A mid (snare, any mid onset) or high (cymbal) hit, sized against its own band's big hits
+    /// of the last minute (≈1 for a big one; quiet passages give small ones), for the light to
+    /// lift on. Each band stands on its own: nothing is held back to tell a kick from a snare.
+    /// `heavy`: a mid hit among the band's heaviest right now (`HeavyHits`, like the kicks) —
+    /// the light flashes on those and only glows on the rest.
+    case lift(time: Double, band: Bands.Band, strength: Double, heavy: Bool)
 
     /// When it happened (for an expected beat, when it is due).
     public var time: Double {
         switch self {
-        case .expectedBeat(let time), .accent(let time, _), .kick(let time, _), .lift(let time, _, _): time
+        case .expectedBeat(let time), .accent(let time, _), .kick(let time, _), .lift(let time, _, _, _): time
         case .hit(let hit): hit.time
         }
     }
@@ -65,15 +66,19 @@ public final class RhythmAnalyzer {
 
     public let frameRate: Double
     public private(set) var snapshot = RhythmSnapshot()
+    /// Whether to report the accents and the beat grid (`.accent`, `.expectedBeat`): the light
+    /// no longer plays them, only the offline evaluation (`dock-probe rhythm-eval`) does, so the
+    /// live analysis turns them off and spares their work. Tempo, state and intensity run either way.
+    public var reportsBeats = true
 
     private var pickers: [PeakPicker]
     private var tempo: TempoEstimator
     private var tracker: BeatTracker
     private var salience = SalienceDetector()
-    private var kicks = KickDetector()
-    private var lifts: [Bands.Band: BandReference] = [.high: BandReference()]
+    private var kicks = HeavyHits()
+    private var heavyMids = HeavyHits()
+    private var references: [Bands.Band: BandReference] = [.low: BandReference(), .mid: BandReference(), .high: BandReference()]
     private var draw = LowDraw()
-    private var strikes = StrikeSorter()
     private var framesSinceAnalysis = 0
 
     /// Low/mid hits of the last 2 s (time, strength).
@@ -124,7 +129,7 @@ public final class RhythmAnalyzer {
         }
 
         // Beat grid: the tracker runs whenever there is a tempo so its score stays continuous.
-        if let period = tempo.period {
+        if reportsBeats, let period = tempo.period {
             let current = tracker.nextFrame
             if let predicted = tracker.push(onset: frame.onset, periodFrames: period * frameRate),
                snapshot.state == .locked, snapshot.confidence >= Self.gridConfidence {
@@ -133,31 +138,25 @@ public final class RhythmAnalyzer {
         }
 
         // Accents: the strongest low/mid strikes, in any state (intensity scales them).
-        salience.beatPeriod = snapshot.confidence >= Self.unlockConfidence ? tempo.period : nil
-        kicks.beatPeriod = salience.beatPeriod
+        let beatPeriod = snapshot.confidence >= Self.unlockConfidence ? tempo.period : nil
+        salience.beatPeriod = beatPeriod
+        kicks.beatPeriod = beatPeriod
+        heavyMids.beatPeriod = beatPeriod
         for hit in hits {
-            if let accent = salience.push(hit) { events.append(.accent(time: accent.time, strength: accent.strength)) }
-            if hit.band == .high {
-                events.append(.lift(time: hit.time, band: .high, strength: min(1, lifts[.high]!.size(of: hit))))
-            } else if let strike = strikes.push(hit) {
-                events += sorted(strike)
+            if reportsBeats, let accent = salience.push(hit) { events.append(.accent(time: accent.time, strength: accent.strength)) }
+            // Each band on its own: low hits are kicks, mid and high hits lift.
+            let size = references[hit.band]!.size(of: hit)
+            if hit.band == .low {
+                if let strength = kicks.push(time: hit.time, size: size) { events.append(.kick(time: hit.time, strength: strength)) }
+            } else {
+                let heavy = hit.band == .mid && heavyMids.push(time: hit.time, size: size) != nil
+                events.append(.lift(time: hit.time, band: hit.band, strength: min(1, size), heavy: heavy))
             }
         }
-        if let strike = strikes.flush(at: frame.time) { events += sorted(strike) }
 
         let target = snapshot.state == .calm ? 0 : Self.smoothstep((snapshot.activity - Self.calmBelow) / 0.4)
         snapshot.intensity += (target - snapshot.intensity) * (1 - exp(-dt / 1.0))
         return events
-    }
-
-    /// A sorted strike as events: a kick (if among the heaviest) or a snare lift.
-    private func sorted(_ strike: (time: Double, kind: StrikeSorter.Kind)) -> [RhythmEvent] {
-        switch strike.kind {
-        case .kick(let size):
-            return kicks.push(time: strike.time, size: size).map { [.kick(time: strike.time, strength: $0)] } ?? []
-        case .snare(let size):
-            return [.lift(time: strike.time, band: .mid, strength: min(1, size))]
-        }
     }
 
     // MARK: - Activity and state

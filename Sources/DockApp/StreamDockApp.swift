@@ -22,6 +22,11 @@ struct StreamDockApp: App {
             SettingsView(controller: appDelegate.controller)
         }
         .windowResizability(.contentSize)
+
+        Window("律动可视化", id: "glow-scope") {
+            GlowScopeView()
+        }
+        .windowResizability(.contentSize)
     }
 }
 

@@ -9,6 +9,13 @@ struct GeneralControlsTests {
     static let hold: Duration = .milliseconds(100)
     static let pastHold: Duration = .milliseconds(250)
 
+    /// Waits until `condition` holds, however busy the machine is (other suites share the main
+    /// actor), giving up after three seconds.
+    func eventually(_ condition: () -> Bool) async throws {
+        let deadline = ContinuousClock.now + .seconds(3)
+        while !condition() && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+    }
+
     @Test func displaySleepRequiresContinuousHoldAndCanBeRearmed() async throws {
         var calls = 0
         let module = DisplaySleepModule(hold: Self.hold) { calls += 1; return true }
@@ -19,7 +26,7 @@ struct GeneralControlsTests {
         try await Task.sleep(for: Self.pastHold)
         #expect(calls == 0)
         module.keyDown(slot: 0)
-        try await Task.sleep(for: Self.pastHold)
+        try await eventually { calls == 1 && module.hold.progress == nil }
         #expect(calls == 1)
         #expect(module.hold.progress == nil)
         // A repeated down while still held must not trigger another sleep.
@@ -39,11 +46,11 @@ struct GeneralControlsTests {
         module.keyDown(slot: 3)
         #expect(module.face(forSlot: 3).hold == 0)
         module.keyUp(slot: 3)
-        try await Task.sleep(for: Self.pastHold)
+        try await eventually { reveals == 1 }
         #expect(reveals == 1 && quits == 0)
         // Held through the second: quit, and the release does not also reveal.
         module.keyDown(slot: 3)
-        try await Task.sleep(for: Self.pastHold)
+        try await eventually { quits == 1 }
         module.keyUp(slot: 3)
         #expect(quits == 1 && reveals == 1)
         #expect(module.face(forSlot: 3).hold == nil)

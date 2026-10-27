@@ -172,7 +172,9 @@ final class MusicAudioTap: @unchecked Sendable {
         ioQueue.sync {
             let extractor = FeatureExtractor(sampleRate: sampleRate)
             self.extractor = extractor
-            analyzer = RhythmAnalyzer(frameRate: extractor.frameRate)
+            let analyzer = RhythmAnalyzer(frameRate: extractor.frameRate)
+            analyzer.reportsBeats = false   // the light plays neither accents nor the beat grid
+            self.analyzer = analyzer
             lock.lock()
             currentFrameRate = extractor.frameRate
             lock.unlock()
@@ -250,6 +252,8 @@ final class MusicAudioTap: @unchecked Sendable {
         for sample in mono { energy += sample * sample }
 
         let now = ProcessInfo.processInfo.systemUptime
+        // The detail bands are for traces only: worked out while one records.
+        extractor.computesDetail = RhythmRecorder.shared.isRecording
         let features = mono.withUnsafeBufferPointer { extractor.process($0, endTime: now) }
         var events: [RhythmEvent] = []
         for frame in features {

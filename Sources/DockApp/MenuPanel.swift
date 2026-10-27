@@ -5,6 +5,7 @@ import SwiftUI
 /// The menu bar panel: device state, scene tiles, the two brightness sliders, settings and quit.
 struct MenuPanel: View {
     let controller: DockController
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -27,6 +28,12 @@ struct MenuPanel: View {
                         Label("设置", systemImage: "gearshape")
                     }
                     .keyboardShortcut(",")
+                    Button {
+                        openWindow(id: "glow-scope")
+                        NSApp.activate()
+                    } label: {
+                        Label("律动", systemImage: "waveform")
+                    }
                     Spacer()
                     Button {
                         NSApp.terminate(nil)

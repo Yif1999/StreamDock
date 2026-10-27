@@ -15,6 +15,8 @@
 //   dock-probe bandcompare <trace>  current vs proposed spectrum split for kick / snare / cymbals
 //   dock-probe obslight        OBS recording + streaming split light, red/green and amber/green
 //   dock-probe ledcorners [fl fr br bl]  find the four corners on the ring with the round keys (calibration)
+//   dock-probe satsteps [hue] [percent…]  one hue at falling saturation (100 % … 40 %), announced aloud
+//   dock-probe glowdemo high  the music light's high-frequency glints on their own, then under drums
 //   dock-probe hookpreview     what loading the Codex / Claude hooks would write (writes nothing)
 
 import AppKit
@@ -409,6 +411,113 @@ case "ledcorners":
     print("corners (front-left, front-right, back-right, back-left):", found.map { String($0) }.joined(separator: ", "))
     _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/say"), arguments: ["校准完成"])
     for _ in 0..<2 { device.setLEDFrame(Array(repeating: (0, 0, 0), count: leds)) }
+    device.waitUntilIdle()
+    device.close(notifyDevice: true)
+case "glowdemo":
+    // dock-probe glowdemo high: scripted drums through the music light, rendered as the app
+    // renders it and heard at the same time (synthesised kick, snare and hi-hat, from the one
+    // script the light plays), each part announced aloud — hi-hats on their own (glints), then
+    // with kick and snare (the glints stop, the drums take over), then on their own again.
+    // Quit the app first; it holds the device.
+    guard let identity = M18Device.attached().first else { print("no M18 attached"); break }
+    let gain = Double(DockSettings(defaults: UserDefaults(suiteName: "dev.yif.StreamDock") ?? .standard).ledBrightness) / 100
+    let leds = Int(M18Layout.ledCount)
+    let device = try M18Device(opening: identity) { _ in }
+    device.setLEDBrightness(100)
+    var output = LEDOutput()
+    let grid = FrameGrid(framesPerSecond: LightLayout.framesPerSecond)
+    let driver = MusicGlowDriver(palette: [Swatch(RGB(hex: "#2F6BFF"), share: 0.55), Swatch(RGB(hex: "#FF8A2A"), share: 0.3), Swatch(RGB(hex: "#F2F2F2"), share: 0.15)])
+    // The script: hi-hats on eighths at 120 BPM (accented on the beat); in the middle part a kick
+    // every beat and a snare on 2 and 4.
+    let parts: [(say: String, seconds: Double, drums: Bool)] = [
+        ("只有高频：踩镲", 10, false), ("加上底鼓和军鼓：闪点停下", 10, true), ("又只剩高频", 8, false),
+    ]
+    var script: [DrumHit] = [], partStarts: [Double] = []
+    var start = 0.0
+    for part in parts {
+        partStarts.append(start)
+        for step in 0..<Int(part.seconds / 0.25) {
+            let t = start + Double(step) * 0.25
+            script.append(DrumHit(time: t, kind: .hat(accent: step % 2 == 0)))
+            if part.drums, step % 2 == 0 { script.append(DrumHit(time: t, kind: .kick)) }
+            if part.drums, step % 4 == 2 { script.append(DrumHit(time: t, kind: .snare)) }
+        }
+        start += part.seconds
+    }
+    let player = try DrumPlayer(script: script, duration: start + 1)
+    player.play()
+    let clock = Date()
+    var pending = script[...], lastKick = -10.0, spoken = 0
+    while Date().timeIntervalSince(clock) < start {
+        let t = Date().timeIntervalSince(clock)
+        if spoken < parts.count, t >= partStarts[spoken] {
+            print(parts[spoken].say)
+            _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/say"), arguments: [parts[spoken].say])
+            spoken += 1
+        }
+        var events: [RhythmEvent] = []
+        while let hit = pending.first, hit.time <= t {
+            pending = pending.dropFirst()
+            switch hit.kind {
+            case .hat(let accent): events.append(.lift(time: t, band: .high, strength: accent ? 1 : 0.55, heavy: false))
+            case .kick:
+                events += [.hit(Hit(time: t, band: .low, strength: 8)), .kick(time: t, strength: 1)]
+                lastKick = t
+            case .snare: events.append(.lift(time: t, band: .mid, strength: 1, heavy: true))
+            }
+        }
+        let drums = parts[max(0, spoken - 1)].drums
+        var snapshot = RhythmSnapshot()
+        snapshot.intensity = 0.85
+        snapshot.loudness = Bands(low: drums ? 0.7 : 0.3, mid: 0.5, high: 0.6)
+        snapshot.lowDraw = exp(-(t - lastKick) / 0.2)
+        let frame = driver.frame(at: t, ledCount: leds, events: events, snapshot: snapshot)
+        device.setLEDFrame(output.render(frame, gain: gain).map { ($0.red, $0.green, $0.blue) })
+        Thread.sleep(forTimeInterval: ProbeClock.seconds(until: grid.next()))
+    }
+    player.stop()
+    device.setLEDFrame(Array(repeating: (0, 0, 0), count: leds))
+    device.waitUntilIdle()
+    device.close(notifyDevice: true)
+case "satsteps":
+    // dock-probe satsteps [red|green|blue|#RRGGBB] [percent…]: the whole strip in one hue at
+    // falling saturation (or the percentages given), each step announced aloud and held 5 s, rendered as the app renders it.
+    // Saturation as the music light measures it on the LEDs: (highest − lowest) / highest
+    // channel — 100 % is the hue with no white in it, lower steps add white. Quit the app first;
+    // it holds the device.
+    guard let identity = M18Device.attached().first else { print("no M18 attached"); break }
+    let gain = Double(DockSettings(defaults: UserDefaults(suiteName: "dev.yif.StreamDock") ?? .standard).ledBrightness) / 100
+    let leds = Int(M18Layout.ledCount)
+    let device = try M18Device(opening: identity) { _ in }
+    device.setLEDBrightness(100)
+    var output = LEDOutput()
+    let grid = FrameGrid(framesPerSecond: LightLayout.framesPerSecond)
+    let name = arguments.dropFirst().first ?? "red"
+    let hue: RGB = switch name {
+    case "green": RGB(0, 255, 0)
+    case "blue": RGB(0, 0, 255)
+    case "red": RGB(255, 0, 0)
+    default: RGB(hex: name)
+    }
+    let pure = LightPixel(hue).channels
+    let low = min(pure.0, pure.1, pure.2), high = max(pure.0, pure.1, pure.2)
+    let vivid = ((pure.0 - low) / (high - low), (pure.1 - low) / (high - low), (pure.2 - low) / (high - low))
+    let picked = arguments.dropFirst(2).compactMap { Int($0) }
+    for percent in picked.isEmpty ? [100, 90, 80, 70, 60, 50, 40] : picked {
+        let s = Double(percent) / 100
+        // White added until the lowest channel is (1 − s) of the highest.
+        let channels = (1 - s + s * vivid.0, 1 - s + s * vivid.1, 1 - s + s * vivid.2)
+        let say = "饱和度百分之\(percent)"
+        print(say)
+        _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/say"), arguments: [say])
+        let until = Date().addingTimeInterval(5)
+        while Date() < until {
+            let frame = Array(repeating: LightPixel(channels: channels, level: 0.7), count: leds)
+            device.setLEDFrame(output.render(frame, gain: gain).map { ($0.red, $0.green, $0.blue) })
+            Thread.sleep(forTimeInterval: ProbeClock.seconds(until: grid.next()))
+        }
+    }
+    device.setLEDFrame(Array(repeating: (0, 0, 0), count: leds))
     device.waitUntilIdle()
     device.close(notifyDevice: true)
 case "ledbench":

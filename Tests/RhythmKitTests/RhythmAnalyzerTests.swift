@@ -219,7 +219,7 @@ private func errors(_ times: [Double], to targets: [Double]) -> [Double] {
 
     /// Only the heaviest kicks of the last seconds count, sized against the big ones.
     @Test func onlyHeavyKicksBurn() {
-        var kicks = KickDetector()
+        var kicks = HeavyHits()
         var fired: [(beat: Int, strength: Double)] = []
         for beat in 0..<40 {
             let heavy = beat % 4 == 0
@@ -230,21 +230,41 @@ private func errors(_ times: [Double], to targets: [Double]) -> [Double] {
         #expect(fired.allSatisfy { $0.beat % 4 == 0 && $0.strength > 0.9 }, "\(fired)")
     }
 
-    /// A kick's click lands in the mid band too, small for that band: that is the kick. A snare
-    /// landing with a kick is big for the mid band, and wins.
-    @Test func snaresWinOverTheKicksTheyLandWith() {
-        let kicks = Score.steady(bpm: 120, to: 30, band: .low)
-        let clicks = Score.steady(bpm: 120, to: 30, band: .mid, strength: 2)
-        let snares = Score.steady(bpm: 60, from: 1, to: 30, band: .mid, strength: 6)   // on every other kick
-        let run = Run(Score(hits: (kicks + clicks + snares).map { (time: $0.0, band: $0.1, strength: $0.2) }, duration: 30).frames())
-        let lifts = run.events.compactMap { entry -> Double? in
-            if case .lift(let time, .mid, _) = entry.event, time > 5 { return time }
-            return nil
+    /// Each band stands on its own: a snare landing with a kick lifts, and the kick under it
+    /// still counts as a kick — nothing is held back to tell one from the other.
+    @Test func bandsStandOnTheirOwn() {
+        // Kicks every beat, every eighth heavy (only the heaviest count as kicks).
+        let kicks = Score.steady(bpm: 60, to: 30, band: .low, strength: 3) + Score.steady(bpm: 7.5, to: 30, band: .low, strength: 9)
+        let snares = Score.steady(bpm: 60, to: 30, band: .mid, strength: 6)   // with every kick
+        let run = Run(Score(hits: (kicks + snares).map { (time: $0.0, band: $0.1, strength: $0.2) }, duration: 30).frames())
+        var lifts = 0, kicked = 0
+        for (_, event) in run.events {
+            switch event {
+            case .lift(let time, .mid, _, _) where time > 8: lifts += 1
+            case .kick(let time, _) where time > 8: kicked += 1
+            default: break
+            }
         }
-        let onSnares = lifts.filter { abs($0 - $0.rounded()) < 0.03 }.count
-        let onClicksOnly = lifts.count - onSnares
-        #expect(onSnares >= 20, "snares lifted: \(onSnares) of 25")
-        #expect(onClicksOnly <= 2, "kick clicks lifted: \(onClicksOnly)")
+        #expect(lifts >= 20, "snares lifted: \(lifts) of 22")
+        #expect(kicked >= 2, "heavy kicks under them: \(kicked) of 3")
+    }
+
+    /// The rolling window gives exactly the percentiles of sorting its values each time.
+    @Test func rollingWindowMatchesSorting() {
+        var generator = SeededGenerator(seed: 7)
+        var window = RollingWindow(seconds: 6)
+        var plain: [(time: Double, value: Double)] = []
+        for step in 0..<3000 {
+            let time = Double(step) / 94
+            let value = Double(Int.random(in: 0..<50, using: &generator)) / 10   // with repeats
+            window.push(time: time, value: value)
+            plain.append((time, value))
+            plain.removeAll { $0.time < time - 6 }
+            let sorted = plain.map(\.value).sorted()
+            for fraction in [0, 0.2, 0.5, 0.9, 0.95, 1] {
+                #expect(window.percentile(fraction) == sorted[Int(Double(sorted.count - 1) * fraction)])
+            }
+        }
     }
 
     /// Detail bands and the note survive the trace format.
@@ -256,28 +276,5 @@ private func errors(_ times: [Double], to targets: [Double]) -> [Double] {
         let trace = RhythmTrace(text: text)!
         #expect(trace.frames.first?.detail == [1, 2, 3, 4, 5] && trace.frames.first?.detailRaw == [0.1, 0.2, 0.3, 0.4, 0.5])
         #expect(trace.notes == ["Song – Artist | at uptime 10.000 the track was 3.00 s in"])
-    }
-
-    /// Kick or snare by where the strike stands out, whatever the song: a kick with a loud click
-    /// stays a kick, a snare with a heavy body stays a snare, never the other way round.
-    @Test func strikesSortByWhereTheyStandOut() {
-        let kicks = Score.steady(bpm: 60, to: 30, band: .low, strength: 6)                       // beats 1, 3
-        let clicks = Score.steady(bpm: 60, to: 30, band: .mid, strength: 4)                      // their loud clicks
-        let snares = Score.steady(bpm: 60, from: 0.5, to: 30, band: .mid, strength: 6)          // 2, 4
-        let bodies = Score.steady(bpm: 60, from: 0.5, to: 30, band: .low, strength: 3)          // their low body
-        let run = Run(Score(hits: (kicks + clicks + snares + bodies).map { (time: $0.0, band: $0.1, strength: $0.2) }, duration: 30).frames())
-        var onKicks = 0, onSnares = 0, kicksOnSnares = 0
-        for (_, event) in run.events {
-            switch event {
-            case .lift(let time, .mid, _) where time > 8:
-                if abs(time - time.rounded()) < 0.03 { onKicks += 1 } else { onSnares += 1 }
-            case .kick(let time, _) where time > 8:
-                if abs(time - time.rounded()) > 0.4 { kicksOnSnares += 1 }
-            default: break
-            }
-        }
-        #expect(onSnares >= 20, "snares lifted: \(onSnares) of 22")
-        #expect(onKicks <= 1, "kicks taken for snares: \(onKicks)")
-        #expect(kicksOnSnares == 0, "snares taken for kicks: \(kicksOnSnares)")
     }
 }

@@ -158,6 +158,7 @@ public final class MediaModule: DockModule {
     }
 
     private static let lightOffDelay = 2.5
+    private static let airPlayRecheck = 10.0
 
     private func updateGlow() {
         guard music.state == .playing || music.state == .paused, let track = music.track else {
@@ -206,10 +207,18 @@ public final class MediaModule: DockModule {
         audioStopTask?.cancel()
         audioStopTask = nil
         guard audioTask == nil else { return }
+        var airPlay = false, airPlayCheckedAt = -Double.infinity
         audioTask = Task { [weak self] in
             while let self, !Task.isCancelled {
+                // Every 2 s the tap checks its route (output device, stalls); Music's AirPlay setting,
+                // an AppleScript round trip that costs Music work too, is asked only every
+                // `airPlayRecheck` s while the tap runs.
                 if let pid = NSRunningApplication.runningApplications(withBundleIdentifier: AppleMusic.bundleID).first?.processIdentifier {
-                    let airPlay = await self.music.airPlayEnabled()
+                    let now = ProcessInfo.processInfo.systemUptime
+                    if !self.audio.isRunning || now - airPlayCheckedAt >= Self.airPlayRecheck {
+                        airPlay = await self.music.airPlayEnabled()
+                        airPlayCheckedAt = now
+                    }
                     guard !Task.isCancelled, self.visible else { return }
                     if self.music.state == .playing { self.audio.start(pid: pid, airPlayEnabled: airPlay) }
                 }

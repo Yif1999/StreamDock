@@ -42,13 +42,13 @@ public enum M18Layout {
     /// 1 back; the base is about 1.1 wide to 1 deep, taken as square). The ring runs round the
     /// edge from the left side, down and counterclockwise, the LEDs between two corners spread
     /// evenly along that side (`corners`). The short bars are level strips `barLength` long,
-    /// centred 0.17 and 0.83 across, 0.22 in from the front, either side of the round keys (from
-    /// a photo, 2026-10-27).
+    /// centred 0.21 and 0.79 across, 0.17 in from the front, either side of the round keys (from
+    /// a photo, then set by eye against the strip in 律动可视化, symmetric, 2026-10-27).
     public static let barLength = 0.12
     public static func position(ofLED index: Int) -> (x: Double, y: Double) {
         switch index {
-        case leftBarLED: return (0.17, 0.22)
-        case rightBarLED: return (0.83, 0.22)
+        case leftBarLED: return (0.21, 0.17)
+        case rightBarLED: return (0.79, 0.17)
         default: return edgePoint(lap: (Double(index) + 0.5) / Double(ringLEDs.count))
         }
     }
