@@ -78,21 +78,32 @@ struct HeavyHits {
     }
 }
 
-/// The draw of the low end — kick and bass together — as a level 0...1 that follows the low
-/// band's energy: 0 at its usual floor, 1 at its recent peaks. Measured against the last
-/// `window` seconds (floor at the `floorPercentile`, top at the `topPercentile`), with a span
-/// of at least `minimumSpan` of the top, so a steady bass drone settles back to 0 and only
-/// what rises out of it — a kick, a new bass note — draws.
+/// The draw of the low end — kick and bass together — as a level 0...1, the larger of two parts:
+/// - held: how loud the low end is under its hits — the median of the last `heldWindow` s, so
+///   kicks do not lift it — against the song's own loud low end (`loudness.low` is scaled to
+///   its peaks of the last minute). From `heldFloor` to `heldFull` it rises smoothly to
+///   `heldMost`: a bass that plays keeps the light drawn for as long as it plays, a passage
+///   without one lets go (2026-10-27: measured against the last 6 s alone, a bass that kept
+///   playing became the floor and the draw fell back to 0.1–0.2 after a few seconds).
+/// - rising: what rises out of the last `window` s (floor at the `floorPercentile`, top at the
+///   `topPercentile`, a span of at least `minimumSpan` of the top) — a kick, a new bass note —
+///   up to 1, over the held part.
 struct LowDraw {
     static let window = 6.0, floorPercentile = 0.2, topPercentile = 0.95, minimumSpan = 0.35
+    static let heldWindow = 1.0, heldFloor = 0.15, heldFull = 0.4, heldMost = 0.7
     private var history = RollingWindow(seconds: window)
-    private(set) var value = 0.0
+    private var recent = RollingWindow(seconds: heldWindow)
+    private(set) var held = 0.0, rising = 0.0
+    var value: Double { max(held, rising) }
 
     mutating func push(time: Double, level: Double) {
         history.push(time: time, value: level)
+        recent.push(time: time, value: level)
         let floor = history.percentile(Self.floorPercentile)
         let top = history.percentile(Self.topPercentile)
         let span = max(top - floor, Self.minimumSpan * top, 1e-6)
-        value = min(1, max(0, (level - floor) / span))
+        rising = min(1, max(0, (level - floor) / span))
+        let under = recent.percentile(0.5)
+        held = Self.heldMost * RhythmAnalyzer.smoothstep((under - Self.heldFloor) / (Self.heldFull - Self.heldFloor))
     }
 }

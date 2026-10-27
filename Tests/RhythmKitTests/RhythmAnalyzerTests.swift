@@ -207,14 +207,34 @@ private func errors(_ times: [Double], to targets: [Double]) -> [Double] {
 }
 
 @Suite struct LowEndTests {
-    /// A steady bass drone settles to no draw; a kick rising out of it draws fully.
-    @Test func droneSettlesAndKicksDraw() {
+    /// A bass that keeps playing keeps drawing (the held part); a kick rising out of it draws
+    /// fully; a passage with little low end lets go.
+    @Test func bassHoldsAndKicksDraw() {
         var draw = LowDraw()
         var time = 0.0
-        for _ in 0..<600 { time += 0.01; draw.push(time: time, level: 0.5) }
-        #expect(draw.value < 0.05, "drone \(draw.value)")
-        draw.push(time: time + 0.01, level: 0.95)
+        for _ in 0..<600 { time += 0.01; draw.push(time: time, level: 0.45) }
+        #expect(abs(draw.value - LowDraw.heldMost) < 0.02, "bass \(draw.value)")
+        #expect(draw.rising < 0.05, "nothing rises out of it \(draw.rising)")
+        time += 0.01
+        draw.push(time: time, level: 0.95)
         #expect(draw.value > 0.9, "kick \(draw.value)")
+        for _ in 0..<300 { time += 0.01; draw.push(time: time, level: 0.05) }
+        #expect(draw.held < 0.01, "quiet \(draw.held)")
+    }
+
+    /// Kicks over a quiet low end draw on each hit but do not hold it: the median under them
+    /// stays low.
+    @Test func kicksAloneDoNotHold() {
+        var draw = LowDraw()
+        var time = 0.0, peaks: [Double] = [], between: [Double] = []
+        for frame in 0..<1000 {
+            time += 0.01
+            let kick = frame % 50 < 5   // a 50 ms kick every half second
+            draw.push(time: time, level: kick ? 1 : 0.05)
+            if frame > 600 { (kick ? { peaks.append(draw.value) } : { between.append(draw.value) })() }
+        }
+        #expect(peaks.max()! > 0.9)
+        #expect(draw.held < 0.01 && between.max()! < 0.05, "held \(draw.held)")
     }
 
     /// Only the heaviest kicks of the last seconds count, sized against the big ones.
