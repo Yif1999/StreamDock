@@ -94,12 +94,17 @@ import Testing
     /// The LEDs sit round a square, in the ring's order: 0 just below the middle of the left
     /// side, 5 mid-front, 10/11 either side of mid-right, 16 mid-back, 21 just above mid-left.
     @Test func ledsSitRoundTheSquare() {
+        // Measured corners 2.5 / 8.5 / 13.5 / 19.5: 6 LEDs front and back, 5 left and right.
         let p = LightLayout.position
-        #expect(p(0).x == 0 && p(0).y < 0.5 && p(0).y > 0.3)
-        #expect(abs(p(5).x - 0.5) < 1e-9 && p(5).y == 0)
-        #expect(p(10).x == 1 && p(10).y < 0.5 && p(11).x == 1 && p(11).y > 0.5)
-        #expect(abs(p(16).x - 0.5) < 1e-9 && p(16).y == 1)
-        #expect(p(21).x == 0 && p(21).y > 0.5)
+        func near(_ a: (x: Double, y: Double), x: Double, y: Double) -> Bool { abs(a.x - x) < 1e-9 && abs(a.y - y) < 1e-9 }
+        #expect(near(p(0), x: 0, y: 0.5))
+        #expect(near(p(5), x: 2.5 / 6, y: 0) && near(p(6), x: 3.5 / 6, y: 0))
+        #expect(near(p(11), x: 1, y: 0.5))
+        #expect(near(p(16), x: 3.5 / 6, y: 1) && near(p(17), x: 2.5 / 6, y: 1))
+        #expect(near(p(21), x: 0, y: 0.7))
+        // Between LEDs the edge moves on evenly, round the corners and back to the start.
+        #expect(near(LightLayout.edgePoint(lap: 3 / 22), x: 0, y: 0))
+        #expect(near(LightLayout.edgePoint(lap: 1), x: 0, y: 0.6))
     }
 
     /// At rest the main color holds most of the ring, and the canvas keeps moving gently.

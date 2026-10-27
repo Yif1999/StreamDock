@@ -17,6 +17,7 @@ final class OBSStatusLight: LightAnimation {
     static let pausedColor = RGB(hex: "#FF9C00")
     let state: OBSOutputState
     init(state: OBSOutputState) { self.state = state }
+
     var isActive: Bool { state.active }
 
     func pixels(at time: TimeInterval, ledCount: Int) -> [LightPixel] {
@@ -30,10 +31,10 @@ final class OBSStatusLight: LightAnimation {
         if state.recording && state.streaming {
             var colors = Array(repeating: streaming, count: ledCount)
             let ring = LightLayout.ring.filter { $0 < ledCount }
-            for (index, led) in ring.enumerated() {
-                // User-confirmed: 0–10 lower half, 11–21 upper half, counterclockwise.
-                // Left end: 21/0; right end: 10/11. Seams: lower 5 and upper 16.
-                let horizontal = -cos(2 * .pi * (Double(index) + 0.5) / Double(ring.count))
+            for led in ring {
+                // Split by where the LED actually sits: left of the middle records, right
+                // streams, softly across the line (the line falls between LEDs 5/6 and 16/17).
+                let horizontal = 2 * LightLayout.position(led).x - 1
                 let weight = 0.5 - 0.5 * tanh(horizontal / 0.18)
                 colors[led] = streaming.mixed(with: recording, amount: weight)
             }
@@ -42,6 +43,15 @@ final class OBSStatusLight: LightAnimation {
             return colors
         }
         return Array(repeating: state.recording ? recording : state.streaming ? streaming : .black, count: ledCount)
+    }
+}
+
+/// Both outputs' split light, for `dock-probe obslight`: recording (or paused) and streaming.
+public enum OBSLightPreview {
+    @MainActor
+    public static func pixels(paused: Bool, at time: TimeInterval, ledCount: Int) -> [LightPixel] {
+        OBSStatusLight(state: OBSOutputState(recording: true, paused: paused, streaming: true))
+            .pixels(at: time, ledCount: ledCount)
     }
 }
 

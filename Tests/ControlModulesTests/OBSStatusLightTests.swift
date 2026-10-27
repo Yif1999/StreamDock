@@ -21,11 +21,11 @@ struct OBSStatusLightTests {
         let colors = light.colors(at: 0.5, ledCount: 24)
         #expect(colors[LightLayout.leftBar] == OBSStatusLight.recordingColor)
         #expect(colors[LightLayout.rightBar] == OBSStatusLight.streamingColor)
-        // Both half-rings must agree: 21/0 left, 10/11 right; 5/16 are seams.
-        for index in [0, 1, 4, 17, 21] {
+        // Split by where the LEDs sit: the middle falls between 5/6 (front) and 16/17 (back).
+        for index in [0, 1, 4, 5, 17, 21] {
             #expect(colors[LightLayout.ring[index]].red > colors[LightLayout.ring[index]].green)
         }
-        for index in [6, 10, 11, 12, 15] {
+        for index in [6, 10, 11, 12, 15, 16] {
             #expect(colors[LightLayout.ring[index]].green > colors[LightLayout.ring[index]].red)
         }
         let paused = OBSStatusLight(state: OBSOutputState(recording: true, paused: true, streaming: true))

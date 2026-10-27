@@ -13,6 +13,8 @@
 //   dock-probe ledwalk [rate…]  one lit LED walking the ring at each rate, for a slow-motion video
 //   dock-probe ledscan <video> [rate…]  read an ledwalk video: frames the strip actually showed
 //   dock-probe bandcompare <trace>  current vs proposed spectrum split for kick / snare / cymbals
+//   dock-probe obslight        OBS recording + streaming split light, red/green and amber/green
+//   dock-probe ledcorners [fl fr br bl]  find the four corners on the ring with the round keys (calibration)
 //   dock-probe hookpreview     what loading the Codex / Claude hooks would write (writes nothing)
 
 import AppKit
@@ -320,6 +322,94 @@ case "agentlight":
     for _ in 0..<2 { send(idle) }
     device.waitUntilIdle()
     print("LED frames dropped (transport busy): \(device.droppedLEDFrames)")
+    device.close(notifyDevice: true)
+case "obslight":
+    // dock-probe obslight: OBS recording and streaming together — red/green, then paused
+    // (amber)/green — each announced aloud and held 8 s, rendered as the app renders it. Quit the
+    // app first; it holds the device.
+    guard let identity = M18Device.attached().first else { print("no M18 attached"); break }
+    let gain = Double(DockSettings(defaults: UserDefaults(suiteName: "dev.yif.StreamDock") ?? .standard).ledBrightness) / 100
+    let leds = Int(M18Layout.ledCount)
+    let device = try M18Device(opening: identity) { _ in }
+    device.setLEDBrightness(100)
+    var output = LEDOutput()
+    let clock = Date()
+    let grid = FrameGrid(framesPerSecond: LightLayout.framesPerSecond)
+    func send(_ frame: [LightPixel]) {
+        device.setLEDFrame(output.render(frame, gain: gain).map { ($0.red, $0.green, $0.blue) })
+        Thread.sleep(forTimeInterval: ProbeClock.seconds(until: grid.next()))
+    }
+    let cases: [(say: String, paused: Bool)] = [("红绿", false), ("黄绿", true)]
+    var previous = cases[0]
+    for item in cases {
+        print(item.say)
+        let speech = try? Process.run(URL(fileURLWithPath: "/usr/bin/say"), arguments: [item.say])
+        while speech?.isRunning == true {
+            send(OBSLightPreview.pixels(paused: previous.paused, at: Date().timeIntervalSince(clock), ledCount: leds))
+        }
+        let since = Date().timeIntervalSince(clock)
+        while Date().timeIntervalSince(clock) < since + 8 {
+            send(OBSLightPreview.pixels(paused: item.paused, at: Date().timeIntervalSince(clock), ledCount: leds))
+        }
+        previous = item
+    }
+    send(Array(repeating: LightPixel(.black), count: leds))
+    device.waitUntilIdle()
+    device.close(notifyDevice: true)
+case "ledcorners":
+    // dock-probe ledcorners: find where the base's four corners fall on the ring. For each corner
+    // (front-left, front-right, back-right, back-left, announced aloud) a bright marker sits on
+    // the ring: the left and right round keys move it left and right as seen from the front, in
+    // half-LED steps — one LED lit means the corner is at that LED, two lit that it falls between
+    // them — and the middle round key confirms. Prints the four corners as ring positions.
+    // Four positions on the command line (an earlier run's) start the markers there, for fine-tuning.
+    // Quit the app first; it holds the device.
+    guard let identity = M18Device.attached().first else { print("no M18 attached"); break }
+    final class Presses: @unchecked Sendable {
+        private let lock = NSLock()
+        private var keys: [Int] = []
+        func add(_ key: Int) { lock.lock(); keys.append(key); lock.unlock() }
+        func take() -> [Int] { lock.lock(); defer { keys = []; lock.unlock() }; return keys }
+    }
+    let presses = Presses()
+    let device = try M18Device(opening: identity) { event in
+        if event.pressed, case .round(let key) = event.key { presses.add(key) }
+    }
+    device.setLEDBrightness(100)
+    let leds = Int(M18Layout.ledCount), ring = M18Layout.ringLEDs.count
+    let grid = FrameGrid(framesPerSecond: LightLayout.framesPerSecond)
+    // Name, which way "left" runs round the ring there, where the even layout puts it.
+    let corners: [(name: String, left: Double, guess: Double)] = [
+        ("左前角", -1, 0.125), ("右前角", -1, 0.375), ("右后角", 1, 0.625), ("左后角", 1, 0.875),
+    ]
+    let earlier = arguments.dropFirst().compactMap(Double.init)
+    var found: [Double] = []
+    for (index, corner) in corners.enumerated() {
+        var marker = earlier.count == 4 ? earlier[index] : (corner.guess * Double(ring) * 2 - 1).rounded() / 2
+        print("\(corner.name): left/right round keys move, middle confirms")
+        _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/say"), arguments: ["\(corner.name)，用左右圆键把亮点移到角上，中间圆键确认"])
+        var confirmed = false
+        while !confirmed {
+            for key in presses.take() {
+                switch key {
+                case 1: marker += 0.5 * corner.left
+                case 3: marker -= 0.5 * corner.left
+                default: confirmed = true
+                }
+                marker = (marker + Double(ring)).truncatingRemainder(dividingBy: Double(ring))
+                if !confirmed { print("  \(marker)") }
+            }
+            let lit = marker == marker.rounded(.down) ? [Int(marker)] : [Int(marker), (Int(marker) + 1) % ring]
+            device.setLEDFrame((0..<leds).map { lit.contains($0) ? (255, 255, 255) : $0 < ring ? (0, 0, 40) : (0, 0, 0) })
+            Thread.sleep(forTimeInterval: ProbeClock.seconds(until: grid.next()))
+        }
+        print("  \(corner.name) = \(marker)")
+        found.append(marker)
+    }
+    print("corners (front-left, front-right, back-right, back-left):", found.map { String($0) }.joined(separator: ", "))
+    _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/say"), arguments: ["校准完成"])
+    for _ in 0..<2 { device.setLEDFrame(Array(repeating: (0, 0, 0), count: leds)) }
+    device.waitUntilIdle()
     device.close(notifyDevice: true)
 case "ledbench":
     // dock-probe ledbench [seconds]: light-strip frames at 60 Hz on the frame grid, timed: how

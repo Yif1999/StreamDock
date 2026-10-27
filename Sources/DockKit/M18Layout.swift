@@ -25,22 +25,25 @@ public enum M18Layout {
     public static let ledCount: UInt16 = 24
 
     /// User-confirmed physical order (2026-10-24): 0–10 lower half, 11–21 upper half,
-    /// counterclockwise when viewed from above. Left end is 21/0, right end 10/11;
-    /// lower and upper midpoints are 5 and 16. This supersedes the earlier corner mapping.
+    /// counterclockwise when viewed from above. Where each sits: `position(ofLED:)`.
     /// The light guide spreads each LED's light into its neighbours and the short bars.
     public static let ringLEDs = Array(0...21)
     /// The short bars beside the round keys; not part of the ring.
     public static let leftBarLED = 22
     public static let rightBarLED = 23
 
+    /// Where the base's corners fall on the ring, in LED positions (LED i is at i; .5 is between
+    /// two LEDs): front-left, front-right, back-right, back-left. Measured with
+    /// `dock-probe ledcorners`, twice (2026-10-27): 6 LEDs along the front and back, 5 along the
+    /// left and right — the middles fall at 5.5 (front), 11 (right), 16.5 (back) and 0 (left).
+    public static let corners: [Double] = [2.5, 8.5, 13.5, 19.5]
+
     /// Where an LED sits seen from above, in a unit square (x 0 left → 1 right, y 0 front →
-    /// 1 back; the base is square, 2026-10-27). The ring runs evenly round the edge from the
-    /// middle of the left side, down and counterclockwise: 0 just below that middle, 5 the
-    /// middle of the front, 10 and 11 either side of the right side's middle, 16 the middle of
-    /// the back, 21 just above the left side's middle — each side holds 5.5 LEDs, the corners
-    /// falling between two. The short bars are level strips `barLength` long, centred 0.17 and
-    /// 0.83 across, 0.22 in from the front, either side of the round keys (from a photo,
-    /// 2026-10-27; the base is about 1.1 wide to 1 deep, taken as square).
+    /// 1 back; the base is about 1.1 wide to 1 deep, taken as square). The ring runs round the
+    /// edge from the left side, down and counterclockwise, the LEDs between two corners spread
+    /// evenly along that side (`corners`). The short bars are level strips `barLength` long,
+    /// centred 0.17 and 0.83 across, 0.22 in from the front, either side of the round keys (from
+    /// a photo, 2026-10-27).
     public static let barLength = 0.12
     public static func position(ofLED index: Int) -> (x: Double, y: Double) {
         switch index {
@@ -50,16 +53,21 @@ public enum M18Layout {
         }
     }
 
-    /// The point `lap` of the way round the edge (0...1), in the ring's order and square.
+    /// The point `lap` of the way round the ring (0...1, LED i at (i + 0.5) / 22), in the same
+    /// square: between two corners it moves evenly along their side.
     public static func edgePoint(lap: Double) -> (x: Double, y: Double) {
-        let s = (lap - lap.rounded(.down)) * 4   // distance round the edge, in sides
-        switch s {
-        case ..<0.5: return (0, 0.5 - s)
-        case ..<1.5: return (s - 0.5, 0)
-        case ..<2.5: return (1, s - 1.5)
-        case ..<3.5: return (3.5 - s, 1)
-        default: return (0, 4.5 - s)
+        let count = Double(ringLEDs.count)
+        var at = (lap - lap.rounded(.down)) * count - 0.5   // in LED positions
+        while at < corners[0] { at += count }
+        let squareCorners: [(x: Double, y: Double)] = [(0, 0), (1, 0), (1, 1), (0, 1)]
+        for side in 0..<4 {
+            let start = corners[side], end = side < 3 ? corners[side + 1] : corners[0] + count
+            guard at < end || side == 3 else { continue }
+            let f = (at - start) / (end - start)
+            let a = squareCorners[side], b = squareCorners[(side + 1) % 4]
+            return (a.x + (b.x - a.x) * f, a.y + (b.y - a.y) * f)
         }
+        return squareCorners[0]
     }
 
     static let vendorID: UInt16 = 0x6603
