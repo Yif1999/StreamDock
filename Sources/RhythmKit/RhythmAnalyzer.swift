@@ -109,7 +109,7 @@ public final class RhythmAnalyzer {
         let dt = lastFrameTime.map { min(0.1, max(0, frame.time - $0)) } ?? 1 / frameRate
         lastFrameTime = frame.time
         snapshot.loudness = frame.loudness
-        // Frames without energy (old traces) leave the shares out: everything counts, as before.
+        // Frames without energy (older traces) leave the shares out: everything counts.
         let knowsEnergy = frame.energy.low + frame.energy.mid + frame.energy.high > 0
         if knowsEnergy { shares.push(frame.energy) }
         draw.push(time: frame.time, level: frame.loudness.low, share: knowsEnergy ? shares.share(.low) : 1)
@@ -120,8 +120,10 @@ public final class RhythmAnalyzer {
         var hits: [Hit] = []
         for index in pickers.indices {
             let band = pickers[index].band
+            // A hit counts as a real part of its band (`BandShares`); a low one, as everything the
+            // low end drives, only while the low end is a real part of the mix (`LowDraw.present`).
             if let hit = pickers[index].push(time: frame.time, value: frame.flux[band], raw: frame.rawFlux[band]),
-               !knowsEnergy || shares.counts(hit) { hits.append(hit) }
+               !knowsEnergy || (shares.counts(hit) && (band != .low || draw.present > 0)) { hits.append(hit) }
         }
         events += hits.map(RhythmEvent.hit)
 
@@ -155,7 +157,10 @@ public final class RhythmAnalyzer {
             // Each band on its own: low hits are kicks, mid and high hits lift.
             let size = references[hit.band]!.size(of: hit)
             if hit.band == .low {
-                if let strength = kicks.push(time: hit.time, size: size) { events.append(.kick(time: hit.time, strength: strength)) }
+                // A kick pulls as far as the low end is a real part of the mix, like the draw.
+                if let strength = kicks.push(time: hit.time, size: size) {
+                    events.append(.kick(time: hit.time, strength: strength * draw.present))
+                }
             } else {
                 let heavy = hit.band == .mid && heavyMids.push(time: hit.time, size: size) != nil
                 events.append(.lift(time: hit.time, band: hit.band, strength: min(1, size), heavy: heavy))
@@ -171,10 +176,10 @@ public final class RhythmAnalyzer {
 
     private func updateState(now: Double) {
         // Activity: low/mid hitting in the last 2 s against the 75th percentile of that over the
-        // last minute.
+        // song (`TimeScale.song`, measured twice a second).
         let hitting = recentHits.reduce(0) { $0 + $1.strength }
         activityHistory.append(hitting)
-        if activityHistory.count > 120 { activityHistory.removeFirst() }
+        if activityHistory.count > Int(2 * TimeScale.song) { activityHistory.removeFirst() }
         if activityHistory.count >= 8 {
             let sorted = activityHistory.sorted()
             let typical = sorted[Int(Double(sorted.count - 1) * 0.75)]

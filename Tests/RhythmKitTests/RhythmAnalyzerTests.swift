@@ -262,21 +262,18 @@ private func errors(_ times: [Double], to targets: [Double]) -> [Double] {
         #expect(drawn(lowShare: 0.9) > 0.9)
     }
 
-    /// Low and mid hits count only as a real part of their band: not in a band holding next to
-    /// nothing of the mix, nor (mid) a rise that is a speck of what the band holds. High hits always.
+    /// A hit counts only as a real part of its band: in no band while it holds next to nothing of
+    /// the mix; in the mid, not when it rises by a speck of what the band holds.
     @Test func faintSpillsAreNotHits() {
         var shares = BandShares(frameRate: 93.75)
         let bins = shares.binCounts
-        // A steady mix: mid holds a level of 1 per bin, low next to nothing, high a little.
-        for _ in 0..<60 { shares.push(Bands(low: 1e-6 * bins.low, mid: bins.mid, high: 0.1 * bins.high)) }
+        // A steady mix: each band's energy level per bin — low next to nothing, mid 1, high 0.1.
+        for _ in 0..<100 { shares.push(Bands(low: 1e-12 * bins.low, mid: bins.mid, high: 0.01 * bins.high)) }
         func hit(_ band: Bands.Band, rise: Double) -> Hit { Hit(time: 1, band: band, strength: 5, magnitude: rise) }
         #expect(!shares.counts(hit(.mid, rise: 0.05)), "a speck of the mid")
         #expect(shares.counts(hit(.mid, rise: 0.8)), "a real mid hit")
         #expect(!shares.counts(hit(.low, rise: 1)), "a band holding nothing")
-        #expect(shares.counts(hit(.high, rise: 1e-9)), "high hits are left alone")
-        // Under a loud bass, a kick rising little against the band is still a kick.
-        for _ in 0..<60 { shares.push(Bands(low: 100 * bins.low, mid: bins.mid, high: 0.1 * bins.high)) }
-        #expect(shares.counts(hit(.low, rise: 0.5)), "a small kick under a loud bass")
+        #expect(shares.counts(hit(.high, rise: 0.001)), "a high hit in a band that holds something")
     }
 
     /// Only the heaviest kicks of the last seconds count, sized against the big ones.

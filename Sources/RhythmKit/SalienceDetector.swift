@@ -10,27 +10,20 @@ import Foundation
 /// how hard. A low and a mid hit within `mergeWindow` are one strike, size
 /// `lowWeight·low + midWeight·mid`.
 ///
-/// Two time scales on that one measure: *whether* a strike is an accent is its rank among the
-/// strikes of the last `rankWindow` (top `topFraction`, reported the moment it qualifies);
-/// *how strong* it is, its size against the big strikes of the last `magnitudeWindow`. A quiet
-/// or busy passage still has accents, but small ones; only the song's real big hits reach full.
+/// Two time scales on that one measure: *whether* a strike is an accent is `Ranking`'s, among
+/// the strikes of the passage (reported the moment it qualifies) — the same ranking as the heavy
+/// hits'; *how strong* it is, its size against the big strikes of the song. A quiet or busy
+/// passage still has accents, but small ones; only the song's real big hits reach full.
 ///
-/// At most one accent per half beat (`gap`, from the tempo when known): a heavy flash marks
-/// the strongest hit, and several a beat read as strobing. Inside the gap only a strike
-/// bigger than the last accent gets through, so a weaker hit never blocks a stronger one.
+/// At most one accent per `Ranking.gap`. Inside the gap only a strike bigger than the last
+/// accent gets through, so a weaker hit never blocks a stronger one.
 struct SalienceDetector {
     /// Kicks weigh a little more: they are what is felt as the heavy beat.
     static let lowWeight = 1.0, midWeight = 0.8
     static let mergeWindow = 0.04
-    static let rankWindow = 8.0
-    static let topFraction = 0.3
-    /// Gap when the tempo is unknown; otherwise half a beat, within `gapRange`.
-    static let defaultGap = 0.25
-    static let gapRange = 0.2...0.35
-    /// Strikes needed before ranking means anything.
-    static let warmUp = 6
-    /// Band references and accent sizes look back this far.
-    static let magnitudeWindow = 60.0
+    /// Accents are the top 30 % — what listeners tapped as "the strongest hits" (offline
+    /// evaluation, `dock-probe rhythm-eval`) — a little wider than the light's heavy hits.
+    static let top = 0.3
     static let referencePercentile = 0.9
 
     struct Accent: Equatable {
@@ -41,18 +34,13 @@ struct SalienceDetector {
 
     /// Raw hit magnitudes of the last minute, per band.
     private var bandHistory: [Bands.Band: [(time: Double, magnitude: Double)]] = [.low: [], .mid: []]
-    /// Strike sizes: the last `rankWindow` for ranking, the last minute for sizing.
+    /// Strike sizes: the passage's for ranking, the song's for sizing.
     private var history: [(time: Double, size: Double)] = []
     private var longHistory: [(time: Double, size: Double)] = []
     private var strike: (time: Double, low: Double, mid: Double, reported: Bool)?
     private var lastAccent: (time: Double, size: Double) = (-.infinity, 0)
     /// Set from the tempo by the analyzer.
     var beatPeriod: Double?
-
-    private var gap: Double {
-        guard let beatPeriod else { return Self.defaultGap }
-        return min(Self.gapRange.upperBound, max(Self.gapRange.lowerBound, beatPeriod / 2))
-    }
 
     mutating func push(_ hit: Hit) -> Accent? {
         guard hit.band != .high else { return nil }
@@ -68,14 +56,13 @@ struct SalienceDetector {
             }
             strike = (hit.time, hit.band == .low ? relative : 0, hit.band == .low ? 0 : relative, false)
         }
-        history.removeAll { $0.time < hit.time - Self.rankWindow }
-        longHistory.removeAll { $0.time < hit.time - Self.magnitudeWindow }
+        history.removeAll { $0.time < hit.time - TimeScale.context }
+        longHistory.removeAll { $0.time < hit.time - TimeScale.song }
 
-        guard var current = strike, !current.reported, history.count >= Self.warmUp else { return nil }
+        guard var current = strike, !current.reported else { return nil }
         let size = Self.size(current.low, current.mid)
-        guard current.time - lastAccent.time >= gap || size > lastAccent.size else { return nil }
-        let rank = Double(history.filter { $0.size < size }.count) / Double(history.count)
-        guard rank >= 1 - Self.topFraction else { return nil }
+        guard current.time - lastAccent.time >= Ranking.gap(beatPeriod: beatPeriod) || size > lastAccent.size,
+              Ranking.isHeavy(size, among: history.map(\.size), top: Self.top) else { return nil }
         current.reported = true
         strike = current
         lastAccent = (current.time, size)
@@ -87,7 +74,7 @@ struct SalienceDetector {
     private mutating func relativeSize(of hit: Hit) -> Double {
         var recent = bandHistory[hit.band, default: []]
         recent.append((hit.time, hit.magnitude))
-        recent.removeAll { $0.time < hit.time - Self.magnitudeWindow }
+        recent.removeAll { $0.time < hit.time - TimeScale.song }
         bandHistory[hit.band] = recent
         let reference = Self.percentile(recent.map(\.magnitude), Self.referencePercentile)
         return hit.magnitude / max(reference, 1e-12)

@@ -8,7 +8,6 @@ public struct Hit: Sendable, Equatable {
     public let strength: Double
     /// The un-normalised flux at the peak: how loud the hit really is.
     public let magnitude: Double
-
     public init(time: Double, band: Bands.Band, strength: Double, magnitude: Double? = nil) {
         self.time = time
         self.band = band
@@ -17,8 +16,8 @@ public struct Hit: Sendable, Equatable {
     }
 }
 
-/// Finds hits in one band's flux: a local maximum over ±`halfWidth` frames, above the last
-/// second's mean + `deviations`·σ and at least `floor` (flux is relative to the band's
+/// Finds hits in one band's flux: a local maximum over ±`halfWidth` frames, above the mean +
+/// `deviations`·σ over `TimeScale.now` and at least `floor` (flux is relative to the band's
 /// long-run mean, so 2 = twice the usual), at least `minimumInterval` after the previous hit.
 /// Reports each peak `halfWidth` frames late (it needs to see past it).
 struct PeakPicker {
@@ -39,7 +38,7 @@ struct PeakPicker {
         self.deviations = deviations
         self.floor = floor
         halfWidth = 3
-        windowFrames = Int(frameRate)
+        windowFrames = Int(TimeScale.now * frameRate)
     }
 
     mutating func push(time: Double, value: Double, raw: Double? = nil) -> Hit? {

@@ -615,11 +615,53 @@ case "bandshare":
             at += 512
         }
         let sum = total.low + total.mid + total.high
-        print(String(format: "%-20@ share low %.3f mid %.3f high %.3f | low hits %2d rise median %.3f | mid hits %2d rise median %.3f",
+        print(String(format: "%-20@ share low %.2e mid %.2e high %.2e | low hits %2d rise median %.3f | mid hits %2d rise median %.3f",
                      name as NSString, total.low / sum, total.mid / sum, total.high / sum,
                      rises[.low]!.count, median(rises[.low]!), rises[.mid]!.count, median(rises[.mid]!)))
         if name.contains("snare") {
             print("    kicks \(kicks); mid lifts:", lifts.map { String(format: "%.2f%@ %.2f", $0.time, $0.heavy ? "H" : "", $0.strength) }.joined(separator: "  "))
+        }
+    }
+case "bandstats":
+    // dock-probe bandstats <trace>…: per band, its share of the mix and its hits' sizes against
+    // itself and against the mix (10th / 25th / 50th / 75th / 90th percentiles).
+    for path in arguments.dropFirst() {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8), let trace = RhythmTrace(text: text) else { continue }
+        print(URL(fileURLWithPath: path).lastPathComponent)
+        print(BandStats.report(trace))
+    }
+case "midorigin":
+    // dock-probe midorigin <trace>…: which parts of the mid band each mid lift came from, and
+    // whether a low hit came with it (traces with detail bands).
+    for path in arguments.dropFirst() {
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8), let trace = RhythmTrace(text: text) else { continue }
+        print(URL(fileURLWithPath: path).lastPathComponent)
+        print(BandStats.midOrigins(trace))
+    }
+case "eventdump":
+    // dock-probe eventdump <trace>: every event the live analysis makes from a recorded song,
+    // one per line, and the draw every 0.1 s — to compare two versions of the analysis
+    // (scripts diff two dumps): "K t strength" kick, "M t strength heavy" mid lift, "H t strength"
+    // high lift, "L t" low hit, "D t draw intensity".
+    guard let path = arguments.dropFirst().first, let text = try? String(contentsOfFile: path, encoding: .utf8),
+          let trace = RhythmTrace(text: text) else { print("usage: dock-probe eventdump <trace>"); break }
+    let analyzer = RhythmAnalyzer(frameRate: trace.frameRate)
+    analyzer.reportsBeats = false
+    let start = trace.frames.first?.time ?? 0
+    var nextDraw = 0.0
+    for frame in trace.frames {
+        for event in analyzer.process(frame) {
+            switch event {
+            case .kick(let time, let strength): print(String(format: "K %.3f %.3f", time - start, strength))
+            case .lift(let time, .mid, let strength, let heavy): print(String(format: "M %.3f %.3f %d", time - start, strength, heavy ? 1 : 0))
+            case .lift(let time, _, let strength, _): print(String(format: "H %.3f %.3f", time - start, strength))
+            case .hit(let hit) where hit.band == .low: print(String(format: "L %.3f", hit.time - start))
+            default: break
+            }
+        }
+        if frame.time - start >= nextDraw {
+            print(String(format: "D %.2f %.3f %.3f", frame.time - start, analyzer.snapshot.lowDraw, analyzer.snapshot.intensity))
+            nextDraw += 0.1
         }
     }
 case "sharecompare":

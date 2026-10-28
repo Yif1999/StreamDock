@@ -67,10 +67,10 @@ public final class FeatureExtractor {
         window = vDSP.window(ofType: Float.self, usingSequence: .hanningDenormalized, count: Self.frameSize, isHalfWindow: false)
         bandBins = Array(zip(Self.bandEdges.map(\.0), Self.bins(edges: Self.bandEdges.map(\.1), sampleRate: sampleRate)))
         detailBins = Self.bins(edges: Self.detailEdges, sampleRate: sampleRate)
-        detailScale = Self.detailEdges.map { _ in AdaptiveScale(.mean, seconds: 10, floor: 1e-3) }
+        detailScale = Self.detailEdges.map { _ in AdaptiveScale(.mean, seconds: TimeScale.context, floor: 1e-3) }
         for band in Bands.Band.allCases {
-            fluxScale[band] = AdaptiveScale(.mean, seconds: 10, floor: 1e-3)
-            loudnessScale[band] = AdaptiveScale(.peak, seconds: 50, floor: 1e-5)
+            fluxScale[band] = AdaptiveScale(.mean, seconds: TimeScale.context, floor: 1e-3)
+            loudnessScale[band] = AdaptiveScale(.peak, seconds: TimeScale.song, floor: 1e-5)
         }
     }
 
