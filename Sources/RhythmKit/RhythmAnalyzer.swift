@@ -64,6 +64,12 @@ public final class RhythmAnalyzer {
     /// pulses in between the accents.
     static let gridConfidence = 0.3
 
+    /// The shortest gap between two hits of a band. High at 0.05 s, so dense hi-hats, shakers
+    /// and bells (up to 20 a second; 32nds at 120 BPM come 0.053–0.064 s apart in whole frames)
+    /// are each heard and each glint (2026-10-28: at 0.12 s anything faster than 16ths at
+    /// 120 BPM lost every other hit).
+    static let hitSpacing: [Bands.Band: Double] = [.low: 0.08, .mid: 0.08, .high: 0.05]
+
     public let frameRate: Double
     public private(set) var snapshot = RhythmSnapshot()
     /// Whether to report the accents and the beat grid (`.accent`, `.expectedBeat`): the light
@@ -79,6 +85,7 @@ public final class RhythmAnalyzer {
     private var heavyMids = HeavyHits()
     private var references: [Bands.Band: BandReference] = [.low: BandReference(), .mid: BandReference(), .high: BandReference()]
     private var draw = LowDraw()
+    private var shares: BandShares
     private var framesSinceAnalysis = 0
 
     /// Low/mid hits of the last 2 s (time, strength).
@@ -92,12 +99,9 @@ public final class RhythmAnalyzer {
 
     public init(frameRate: Double) {
         self.frameRate = frameRate
-        pickers = [
-            PeakPicker(band: .low, frameRate: frameRate, minimumInterval: 0.08),
-            PeakPicker(band: .mid, frameRate: frameRate, minimumInterval: 0.08),
-            PeakPicker(band: .high, frameRate: frameRate, minimumInterval: 0.12),
-        ]
+        pickers = [Bands.Band.low, .mid, .high].map { PeakPicker(band: $0, frameRate: frameRate, minimumInterval: Self.hitSpacing[$0]!) }
         tempo = TempoEstimator(frameRate: frameRate)
+        shares = BandShares(frameRate: frameRate)
         tracker = BeatTracker(frameRate: frameRate)
     }
 
@@ -105,7 +109,10 @@ public final class RhythmAnalyzer {
         let dt = lastFrameTime.map { min(0.1, max(0, frame.time - $0)) } ?? 1 / frameRate
         lastFrameTime = frame.time
         snapshot.loudness = frame.loudness
-        draw.push(time: frame.time, level: frame.loudness.low)
+        // Frames without energy (old traces) leave the shares out: everything counts, as before.
+        let knowsEnergy = frame.energy.low + frame.energy.mid + frame.energy.high > 0
+        if knowsEnergy { shares.push(frame.energy) }
+        draw.push(time: frame.time, level: frame.loudness.low, share: knowsEnergy ? shares.share(.low) : 1)
         snapshot.lowDraw = draw.value
         var events: [RhythmEvent] = []
 
@@ -113,7 +120,8 @@ public final class RhythmAnalyzer {
         var hits: [Hit] = []
         for index in pickers.indices {
             let band = pickers[index].band
-            if let hit = pickers[index].push(time: frame.time, value: frame.flux[band], raw: frame.rawFlux[band]) { hits.append(hit) }
+            if let hit = pickers[index].push(time: frame.time, value: frame.flux[band], raw: frame.rawFlux[band]),
+               !knowsEnergy || shares.counts(hit) { hits.append(hit) }
         }
         events += hits.map(RhythmEvent.hit)
 

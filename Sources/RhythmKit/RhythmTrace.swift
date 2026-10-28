@@ -4,7 +4,7 @@ import Foundation
 /// music) plus the times the listener tapped along to the beat.
 ///
 ///     # streamdock-rhythm-trace v1 frameRate=93.750
-///     F <time> <flux low> <flux mid> <flux high> <loudness low> <loudness mid> <loudness high> [<raw flux low> <raw flux mid> <raw flux high> [<detail flux ×5> <detail raw flux ×5>]]
+///     F <time> <flux low> <flux mid> <flux high> <loudness low> <loudness mid> <loudness high> [<raw flux low> <raw flux mid> <raw flux high> [<energy low> <energy mid> <energy high>] [<detail flux ×5> <detail raw flux ×5>]]
 ///     # note <text>   (what was playing, from where — for matching times to the song)
 ///     T <time>
 public struct RhythmTrace: Sendable {
@@ -25,6 +25,7 @@ public struct RhythmTrace: Sendable {
             frame.loudness.low, frame.loudness.mid, frame.loudness.high,
             frame.rawFlux.low, frame.rawFlux.mid, frame.rawFlux.high
         )
+        line += String(format: " %.4g %.4g %.4g", frame.energy.low, frame.energy.mid, frame.energy.high)
         if frame.detail.count == FeatureExtractor.detailEdges.count, frame.detailRaw.count == frame.detail.count {
             line += frame.detail.map { String(format: " %.3f", $0) }.joined() + frame.detailRaw.map { String(format: " %.6f", $0) }.joined()
         }
@@ -54,8 +55,14 @@ public struct RhythmTrace: Sendable {
                     frameRate = Double(field.dropFirst("frameRate=".count))
                 }
             case "F":
-                let values = fields.dropFirst().compactMap { Double($0) }
+                var values = fields.dropFirst().compactMap { Double($0) }
                 let details = FeatureExtractor.detailEdges.count
+                // Energy came later: traces without it have 10 or 10 + details values.
+                var energy = Bands()
+                if values.count == 13 || values.count == 13 + 2 * details {
+                    energy = Bands(low: values[10], mid: values[11], high: values[12])
+                    values.removeSubrange(10..<13)
+                }
                 guard values.count == 7 || values.count == 10 || values.count == 10 + 2 * details else { continue }
                 let flux = Bands(low: values[1], mid: values[2], high: values[3])
                 let raw = values.count >= 10 ? Bands(low: values[7], mid: values[8], high: values[9]) : nil
@@ -64,6 +71,7 @@ public struct RhythmTrace: Sendable {
                     onset: weights.low * flux.low + weights.mid * flux.mid + weights.high * flux.high,
                     loudness: Bands(low: values[4], mid: values[5], high: values[6])
                 )
+                frame.energy = energy
                 if values.count == 10 + 2 * details {
                     frame.detail = Array(values[10..<(10 + details)])
                     frame.detailRaw = Array(values[(10 + details)...])

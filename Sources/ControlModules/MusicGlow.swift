@@ -202,10 +202,10 @@ final class MusicGlow: LightAnimation {
                 }
             case .lift(_, _, let strength, _):
                 // Cymbals on their own only: with kicks, snares or a drawing bass about, glints are clutter.
-                guard shows(.high), time - lastGlint >= GlowBudget.glintSpacing,
+                guard shows(.high), playing, time - lastGlint >= GlowBudget.glintSpacing,
                       time - lastLowMid >= GlowBudget.glintQuiet, draw < GlowBudget.glintQuietDraw else { break }
                 lastGlint = time
-                pendingGlints.append(GlowBudget.glint(strength: strength, intensity: intensity))
+                pendingGlints.append(GlowBudget.glint(strength: strength))
             case .accent, .expectedBeat, .hit:
                 break
             }
@@ -450,14 +450,17 @@ final class MusicGlow: LightAnimation {
         if ripples.count > 12 { ripples.removeFirst() }
     }
 
-    /// A glint, at a new place.
+    /// A high hit's glints (`glintCount`, how many picked at random), at new places.
     private func addGlint(size: Double) {
         guard size > 0.01 else { return }
         let lit = glints.filter { $0.envelope.level > 0.1 }.map(\.place)
         var envelope = FlashEnvelope(attack: GlowBudget.glintAttack, decay: GlowBudget.glintDecay)
         envelope.trigger(size)
-        glints.append((place(count: 1, avoiding: lit, gap: GlowBudget.glintGap)[0], 0, envelope))
-        if glints.count > 8 { glints.removeFirst() }
+        let count = Int.random(in: GlowBudget.glintCount, using: &random)
+        for spot in place(count: count, avoiding: lit, gap: GlowBudget.glintGap) {
+            glints.append((spot, 0, envelope))
+        }
+        if glints.count > 12 { glints.removeFirst(glints.count - 12) }
     }
 
     /// Whether some LED stands out alone: unlike both neighbours, which are alike.

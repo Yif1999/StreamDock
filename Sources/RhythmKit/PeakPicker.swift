@@ -59,6 +59,10 @@ struct PeakPicker {
               center.time - lastHit >= minimumInterval
         else { return nil }
         lastHit = center.time
-        return Hit(time: center.time, band: band, strength: center.value, magnitude: center.raw)
+        // Its size: the raw rise over the peak frame and the ones either side. A hit's rise falls
+        // into one frame or splits over two, as it lands against the 512-sample hops; one frame
+        // alone sized the same snare anywhere from 0.4 to 1 of the others (2026-10-28).
+        let raw = recent[(centerIndex - 1)...(centerIndex + 1)].reduce(0) { $0 + $1.raw }
+        return Hit(time: center.time, band: band, strength: center.value, magnitude: raw)
     }
 }

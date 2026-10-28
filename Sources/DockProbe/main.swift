@@ -414,10 +414,16 @@ case "ledcorners":
     device.waitUntilIdle()
     device.close(notifyDevice: true)
 case "glowdemo":
-    // dock-probe glowdemo high: scripted drums through the music light, rendered as the app
-    // renders it and heard at the same time (synthesised kick, snare and hi-hat, from the one
-    // script the light plays), each part announced aloud — hi-hats on their own (glints), then
-    // with kick and snare (the glints stop, the drums take over), then on their own again.
+    // dock-probe glowdemo [high|drums|dense]: scripted drums through the music light, rendered as
+    // the app renders it and heard at the same time (synthesised kick, snare and hi-hat, from the
+    // one script the light plays), each part announced aloud. high: hi-hats on their own
+    // (glints), then with kick and snare (the glints stop, the drums take over), then on their
+    // own again. drums: the standard kick, snare and hi-hat each on its own, then all three
+    // together. dense: chimes on their own (tinkling, 7–12 kHz), 4 a second up to 16. mixed:
+    // chimes 12 a second throughout — alone, over held chords (a plain mid sound, neither bass nor
+    // a beat: the glints go on), with kick and snare added (they stop), over the chords again.
+    // dense and mixed are heard as the app hears music: the sound goes through FeatureExtractor
+    // and RhythmAnalyzer, nothing scripted reaches the light.
     // Quit the app first; it holds the device.
     guard let identity = M18Device.attached().first else { print("no M18 attached"); break }
     let gain = Double(DockSettings(defaults: UserDefaults(suiteName: "dev.yif.StreamDock") ?? .standard).ledBrightness) / 100
@@ -427,24 +433,54 @@ case "glowdemo":
     var output = LEDOutput()
     let grid = FrameGrid(framesPerSecond: LightLayout.framesPerSecond)
     let driver = MusicGlowDriver(palette: [Swatch(RGB(hex: "#2F6BFF"), share: 0.55), Swatch(RGB(hex: "#FF8A2A"), share: 0.3), Swatch(RGB(hex: "#F2F2F2"), share: 0.15)])
-    // The script: hi-hats on eighths at 120 BPM (accented on the beat); in the middle part a kick
-    // every beat and a snare on 2 and 4.
-    let parts: [(say: String, seconds: Double, drums: Bool)] = [
-        ("只有高频：踩镲", 10, false), ("加上底鼓和军鼓：闪点停下", 10, true), ("又只剩高频", 8, false),
-    ]
+    // The script, at 120 BPM: a kick every beat, a snare on 2 and 4, hi-hats `hats` a second
+    // (accented every other) — in the parts that have them.
+    let mode = arguments.dropFirst().first ?? "high"
+    var parts: [(say: String, seconds: Double, kick: Bool, snare: Bool, hats: Double, pad: Bool)] = []
+    let plain: [(say: String, seconds: Double, kick: Bool, snare: Bool, hats: Double)] = switch mode {
+    case "drums": [("底鼓", 8, true, false, 0), ("军鼓", 8, false, true, 0), ("高频踩镲", 8, false, false, 4),
+                   ("三个一起：闪点停下", 10, true, true, 4)]
+    case "dense": [("风铃，每秒四下", 7, false, false, 4), ("每秒八下", 7, false, false, 8),
+                   ("每秒十二下", 7, false, false, 12), ("每秒十六下", 7, false, false, 16)]
+    case "mixed": []
+    default: [("只有高频：踩镲", 10, false, false, 4), ("加上底鼓和军鼓：闪点停下", 10, true, true, 4), ("又只剩高频", 8, false, false, 4)]
+    }
+    parts = mode == "mixed"
+        ? [("风铃", 7, false, false, 12, false), ("加上和弦：闪点继续", 8, false, false, 12, true),
+           ("再加底鼓和军鼓：闪点停下", 8, true, true, 12, true), ("回到风铃和和弦", 8, false, false, 12, true)]
+        : plain.map { ($0.say, $0.seconds, $0.kick, $0.snare, $0.hats, false) }
+    let listens = mode == "dense" || mode == "mixed"
+    let chimes = listens
     var script: [DrumHit] = [], partStarts: [Double] = []
     var start = 0.0
     for part in parts {
         partStarts.append(start)
         for step in 0..<Int(part.seconds / 0.25) {
             let t = start + Double(step) * 0.25
-            script.append(DrumHit(time: t, kind: .hat(accent: step % 2 == 0)))
-            if part.drums, step % 2 == 0 { script.append(DrumHit(time: t, kind: .kick)) }
-            if part.drums, step % 4 == 2 { script.append(DrumHit(time: t, kind: .snare)) }
+            if part.kick, step % 2 == 0 { script.append(DrumHit(time: t, kind: .kick)) }
+            if part.snare, step % 4 == 2 { script.append(DrumHit(time: t, kind: .snare)) }
+            // Held chords, C–Am–F–G, a new one every 2 s.
+            if part.pad, step % 8 == 0 { script.append(DrumHit(time: t, kind: .pad(pitches: DrumHit.chords[step / 8 % 4]))) }
         }
-        start += part.seconds
+        if part.hats > 0 {
+            for step in 0..<Int(part.seconds * part.hats) {
+                let time = start + Double(step) / part.hats
+                // dense and mixed ring chimes, a random note each, for the tinkling; the others play hi-hats.
+                script.append(DrumHit(time: time, kind: chimes ? .chime(pitch: DrumHit.chimeNotes.randomElement()!) : .hat(accent: step % 2 == 0)))
+            }
+        }
+        // A beat of silence after each part, so the next announcement is heard on its own.
+        start += part.seconds + 1
     }
+    script.sort { $0.time < $1.time }
     let player = try DrumPlayer(script: script, duration: start + 1)
+    // Listening: the app's own analysis, fed the synthesised sound as it plays.
+    let extractor = FeatureExtractor(sampleRate: DrumPlayer.sampleRate)
+    extractor.computesDetail = false
+    let analyzer = RhythmAnalyzer(frameRate: extractor.frameRate)
+    analyzer.reportsBeats = false
+    var fed = 0, heard = Array(repeating: 0, count: parts.count), open = Array(repeating: 0, count: parts.count)
+    var lastLowMid = -Double.infinity
     player.play()
     let clock = Date()
     var pending = script[...], lastKick = -10.0, spoken = 0
@@ -456,29 +492,227 @@ case "glowdemo":
             spoken += 1
         }
         var events: [RhythmEvent] = []
-        while let hit = pending.first, hit.time <= t {
-            pending = pending.dropFirst()
-            switch hit.kind {
-            case .hat(let accent): events.append(.lift(time: t, band: .high, strength: accent ? 1 : 0.55, heavy: false))
-            case .kick:
-                events += [.hit(Hit(time: t, band: .low, strength: 8)), .kick(time: t, strength: 1)]
-                lastKick = t
-            case .snare: events.append(.lift(time: t, band: .mid, strength: 1, heavy: true))
-            }
-        }
-        let drums = parts[max(0, spoken - 1)].drums
         var snapshot = RhythmSnapshot()
-        snapshot.intensity = 0.85
-        snapshot.loudness = Bands(low: drums ? 0.7 : 0.3, mid: 0.5, high: 0.6)
-        snapshot.lowDraw = exp(-(t - lastKick) / 0.2)
+        if listens {
+            let upTo = min(player.samples.count, Int(t * DrumPlayer.sampleRate))
+            if upTo > fed {
+                let frames = player.samples[fed..<upTo].withUnsafeBufferPointer { extractor.process($0, endTime: t) }
+                fed = upTo
+                for frame in frames { events += analyzer.process(frame) }
+            }
+            // High hits the light would let glint (MusicGlow eases the draw; this takes it as heard).
+            for event in events {
+                switch event {
+                case .lift(let time, .high, _, _):
+                    heard[max(0, spoken - 1)] += 1
+                    if time - lastLowMid >= 0.6, analyzer.snapshot.lowDraw < 0.15 { open[max(0, spoken - 1)] += 1 }
+                case .kick(let time, _), .lift(let time, .mid, _, true): lastLowMid = time
+                default: break
+                }
+            }
+            snapshot.intensity = analyzer.snapshot.intensity
+            snapshot.loudness = analyzer.snapshot.loudness
+            snapshot.lowDraw = analyzer.snapshot.lowDraw
+        } else {
+            while let hit = pending.first, hit.time <= t {
+                pending = pending.dropFirst()
+                switch hit.kind {
+                case .chime: events.append(.lift(time: t, band: .high, strength: 0.8, heavy: false))
+                case .hat(let accent): events.append(.lift(time: t, band: .high, strength: accent ? 1 : 0.55, heavy: false))
+                case .kick:
+                    events += [.hit(Hit(time: t, band: .low, strength: 8)), .kick(time: t, strength: 1)]
+                    lastKick = t
+                case .snare: events.append(.lift(time: t, band: .mid, strength: 1, heavy: true))
+                case .bass, .pad: break
+                }
+            }
+            let part = parts[max(0, spoken - 1)]
+            snapshot.intensity = 0.85
+            snapshot.loudness = Bands(low: part.kick ? 0.7 : 0.3, mid: part.snare ? 0.6 : 0.4, high: part.hats > 0 ? 0.6 : 0.3)
+            snapshot.lowDraw = exp(-(t - lastKick) / 0.2)
+        }
         let frame = driver.frame(at: t, ledCount: leds, events: events, snapshot: snapshot)
         device.setLEDFrame(output.render(frame, gain: gain).map { ($0.red, $0.green, $0.blue) })
         Thread.sleep(forTimeInterval: ProbeClock.seconds(until: grid.next()))
     }
     player.stop()
+    if listens {
+        for index in parts.indices {
+            print(String(format: "%@: played %d, heard %d, free to glint %d", parts[index].say, Int(parts[index].seconds * parts[index].hats), heard[index], open[index]))
+        }
+    }
     device.setLEDFrame(Array(repeating: (0, 0, 0), count: leds))
     device.waitUntilIdle()
     device.close(notifyDevice: true)
+case "bandshare":
+    // dock-probe bandshare: synthesised scenes through the analysis offline — for each, how much
+    // of the mix's energy each band holds, and how the low and mid hits rise against what their
+    // band holds (raw rise per bin ÷ the band's level per bin over the last 0.5 s).
+    let chords = DrumHit.chords
+    func scene(_ name: String, chimes: Bool = false, pad: Bool = false, kick: Bool = false, snare: Bool = false, bass: Bool = false) -> (String, [DrumHit]) {
+        var script: [DrumHit] = []
+        for step in 0..<40 {   // 10 s of eighths at 120 BPM
+            let t = Double(step) * 0.25
+            if kick, step % 2 == 0 { script.append(DrumHit(time: t, kind: .kick)) }
+            if snare, step % 4 == 2 { script.append(DrumHit(time: t, kind: .snare)) }
+            if bass, step % 2 == 0 { script.append(DrumHit(time: t, kind: .bass(pitch: [55, 55, 65.4, 73.4][step / 2 % 4]))) }
+            if pad, step % 8 == 0 { script.append(DrumHit(time: t, kind: .pad(pitches: chords[step / 8 % 4]))) }
+        }
+        if chimes { script += (0..<120).map { DrumHit(time: Double($0) / 12, kind: .chime(pitch: DrumHit.chimeNotes.randomElement()!)) } }
+        return (name, script.sorted { $0.time < $1.time })
+    }
+    let scenes = [scene("chimes", chimes: true), scene("pad", pad: true), scene("chimes+pad", chimes: true, pad: true),
+                  scene("kick", kick: true), scene("snare", snare: true), scene("bass", bass: true),
+                  scene("kick+snare+bass+pad", pad: true, kick: true, snare: true, bass: true),
+                  scene("all+chimes", chimes: true, pad: true, kick: true, snare: true, bass: true),
+                  scene("kick+snare+pad+chimes", chimes: true, pad: true, kick: true, snare: true),
+                  scene("kick+snare", kick: true, snare: true)]
+    func median(_ values: [Double]) -> Double { values.isEmpty ? .nan : values.sorted()[values.count / 2] }
+    for (name, script) in scenes {
+        let samples = try DrumPlayer(script: script, duration: 10.5).samples
+        let extractor = FeatureExtractor(sampleRate: DrumPlayer.sampleRate)
+        extractor.computesDetail = false
+        let bins = extractor.binCounts
+        var total = Bands(), recent: [Bands] = []
+        var rises: [Bands.Band: [Double]] = [.low: [], .mid: []], shares: [Double] = []
+        var at = 0
+        while at + 512 <= samples.count {
+            for frame in samples[at..<at + 512].withUnsafeBufferPointer({ extractor.process($0, endTime: Double(at + 512) / DrumPlayer.sampleRate) }) {
+                recent.append(frame.energy)
+                if recent.count > 47 { recent.removeFirst() }
+                if frame.time > 2 {
+                    for band in Bands.Band.allCases { total[band] += frame.energy[band] }
+                    let sum = frame.energy.low + frame.energy.mid + frame.energy.high
+                    if sum > 0 { shares.append(frame.energy.low / sum) }
+                }
+            }
+            at += 512
+        }
+        // Hits, as the analyzer picks them.
+        let extractor2 = FeatureExtractor(sampleRate: DrumPlayer.sampleRate)
+        extractor2.computesDetail = false
+        let analyzer = RhythmAnalyzer(frameRate: extractor2.frameRate)
+        analyzer.reportsBeats = false
+        var history: [Bands] = []
+        var lifts: [(time: Double, heavy: Bool, strength: Double)] = [], kicks = 0, midHits: [Double] = []
+        at = 0
+        while at + 512 <= samples.count {
+            for frame in samples[at..<at + 512].withUnsafeBufferPointer({ extractor2.process($0, endTime: Double(at + 512) / DrumPlayer.sampleRate) }) {
+                history.append(frame.energy)
+                if history.count > 47 { history.removeFirst() }
+                for event in analyzer.process(frame) where event.time > 2 {
+                    switch event {
+                    case .hit(let hit) where hit.band != .high:
+                        let level = sqrt(history.reduce(0) { $0 + $1[hit.band] } / Double(history.count) / bins[hit.band])
+                        rises[hit.band]!.append(hit.magnitude / max(level, 1e-12))
+                        if hit.band == .mid { midHits.append(hit.time) }
+                    case .lift(let time, .mid, let strength, let heavy): lifts.append((time, heavy, strength))
+                    case .kick: kicks += 1
+                    default: break
+                    }
+                }
+            }
+            at += 512
+        }
+        let sum = total.low + total.mid + total.high
+        print(String(format: "%-20@ share low %.3f mid %.3f high %.3f | low hits %2d rise median %.3f | mid hits %2d rise median %.3f",
+                     name as NSString, total.low / sum, total.mid / sum, total.high / sum,
+                     rises[.low]!.count, median(rises[.low]!), rises[.mid]!.count, median(rises[.mid]!)))
+        if name.contains("snare") {
+            print("    kicks \(kicks); mid lifts:", lifts.map { String(format: "%.2f%@ %.2f", $0.time, $0.heavy ? "H" : "", $0.strength) }.joined(separator: "  "))
+        }
+    }
+case "sharecompare":
+    // dock-probe sharecompare <trace>: a recorded song through the analysis twice — as recorded,
+    // and with the band energies left out (the rules before BandShares) — to see what the
+    // shares change on real music: low hits and kicks, mid lifts and heavy ones, the draw.
+    guard let path = arguments.dropFirst().first, let text = try? String(contentsOfFile: path, encoding: .utf8),
+          let trace = RhythmTrace(text: text) else { print("usage: dock-probe sharecompare <trace>"); break }
+    var kickTimes: [[Double]] = [[], []]
+    for withShares in [false, true] {
+        let analyzer = RhythmAnalyzer(frameRate: trace.frameRate)
+        analyzer.reportsBeats = false
+        var low = 0, kicks = 0, mids = 0, heavy = 0, highs = 0, draw = 0.0, frames = 0, bigMids = 0
+        for var frame in trace.frames {
+            if !withShares { frame.energy = Bands() }
+            for event in analyzer.process(frame) {
+                switch event {
+                case .hit(let hit) where hit.band == .low: low += 1
+                case .kick(let time, _): kicks += 1; kickTimes[withShares ? 1 : 0].append(time)
+                case .lift(_, .mid, let strength, let isHeavy):
+                    mids += 1
+                    if isHeavy { heavy += 1 }
+                    if strength >= 0.7 { bigMids += 1 }
+                case .lift(_, .high, _, _): highs += 1
+                default: break
+                }
+            }
+            draw += analyzer.snapshot.lowDraw
+            frames += 1
+        }
+        print(String(format: "%@: low hits %d, kicks %d | mid lifts %d, heavy %d, ≥0.7 of big hits %d | high %d | draw mean %.2f",
+                     withShares ? "with shares   " : "without shares", low, kicks, mids, heavy, bigMids, highs, draw / Double(max(1, frames))))
+    }
+    // Kicks only one of the two finds, with the low band's share and the hit's rise against it.
+    let start = trace.frames.first?.time ?? 0
+    var shares = BandShares(frameRate: trace.frameRate)
+    var lost: [String] = [], gained: [String] = []
+    for frame in trace.frames {
+        shares.push(frame.energy)
+        for (index, times) in kickTimes.enumerated() {
+            for time in times where abs(time - frame.time) < 1e-6 && !kickTimes[1 - index].contains(where: { abs($0 - time) < 0.05 }) {
+                let entry = String(format: "%.2f s (low share %.2f)", time - start, shares.share(.low))
+                if index == 0 { lost.append(entry) } else { gained.append(entry) }
+            }
+        }
+    }
+    print("kicks lost:", lost.joined(separator: ", "))
+    print("kicks gained:", gained.joined(separator: ", "))
+case "chimelisten":
+    // dock-probe chimelisten: synthesised chimes on their own, 4 to 16 a second, through the
+    // app's analysis offline (nothing played): per part, the hits each band hears and how many
+    // high hits would glint (no kick or heavy mid in the last 0.6 s, the low end not drawing).
+    let rates = [4.0, 8, 12, 16]
+    var script: [DrumHit] = []
+    for (index, rate) in rates.enumerated() {
+        for step in 0..<Int(7 * rate) { script.append(DrumHit(time: Double(index) * 8 + Double(step) / rate, kind: .chime(pitch: DrumHit.chimeNotes.randomElement()!))) }
+    }
+    // chimelisten pad: over held chords (C–Am–F–G, a new one every 2 s, swelling in).
+    if arguments.dropFirst().first == "pad" {
+        script += stride(from: 0.0, to: 32, by: 2).enumerated().map { DrumHit(time: $1, kind: .pad(pitches: DrumHit.chords[$0 % 4])) }
+    }
+    let samples = try DrumPlayer(script: script, duration: 33).samples
+    let extractor = FeatureExtractor(sampleRate: DrumPlayer.sampleRate)
+    extractor.computesDetail = false
+    let analyzer = RhythmAnalyzer(frameRate: extractor.frameRate)
+    analyzer.reportsBeats = false
+    var counts = Array(repeating: (high: 0, mid: 0, heavy: 0, low: 0, kicks: 0, glints: 0), count: rates.count)
+    var lastLowMid = -Double.infinity
+    var draws = Array(repeating: [Double](), count: rates.count)
+    var at = 0
+    while at + 512 <= samples.count {
+        let frames = samples[at..<at + 512].withUnsafeBufferPointer { extractor.process($0, endTime: Double(at + 512) / DrumPlayer.sampleRate) }
+        at += 512
+        for frame in frames {
+            for event in analyzer.process(frame) {
+                let part = min(rates.count - 1, Int(event.time / 8))
+                switch event {
+                case .lift(let time, .high, _, _):
+                    counts[part].high += 1
+                    // As MusicGlow lets a glint through (draw left out: the light's own easing of it).
+                    if time - lastLowMid >= 0.6, analyzer.snapshot.lowDraw < 0.15 { counts[part].glints += 1 }
+                    draws[part].append(analyzer.snapshot.lowDraw)
+                case .lift(let time, .mid, _, let heavy):
+                    counts[part].mid += 1
+                    if heavy { counts[part].heavy += 1; lastLowMid = time }
+                case .hit(let hit) where hit.band == .low: counts[part].low += 1
+                case .kick(let time, _): counts[part].kicks += 1; lastLowMid = time
+                default: break
+                }
+            }
+        }
+    }
+    for ((rate, c), draw) in zip(zip(rates, counts), draws) { print(String(format: "%2.0f/s played %3d: high %3d → glints %3d; mid %3d (heavy %d), low %d (kicks %d); draw at high hits mean %.2f", rate, Int(7 * rate), c.high, c.glints, c.mid, c.heavy, c.low, c.kicks, draw.reduce(0, +) / Double(max(1, draw.count)))) }
 case "satsteps":
     // dock-probe satsteps [red|green|blue|#RRGGBB] [percent…]: the whole strip in one hue at
     // falling saturation (or the percentages given), each step announced aloud and held 5 s, rendered as the app renders it.

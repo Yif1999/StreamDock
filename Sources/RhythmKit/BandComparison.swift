@@ -40,10 +40,10 @@ public enum BandComparison {
 
         // Proposed: peaks in the detail bands, with the live picker's settings.
         var pickers = [
-            PeakPicker(band: .low, frameRate: trace.frameRate, minimumInterval: 0.08),    // 30–150
-            PeakPicker(band: .mid, frameRate: trace.frameRate, minimumInterval: 0.08),    // 150–400 body
-            PeakPicker(band: .mid, frameRate: trace.frameRate, minimumInterval: 0.08),    // 2–6 k wires
-            PeakPicker(band: .high, frameRate: trace.frameRate, minimumInterval: 0.12),   // 6–16 k cymbals
+            PeakPicker(band: .low, frameRate: trace.frameRate, minimumInterval: RhythmAnalyzer.hitSpacing[.low]!),    // 30–150
+            PeakPicker(band: .mid, frameRate: trace.frameRate, minimumInterval: RhythmAnalyzer.hitSpacing[.mid]!),    // 150–400 body
+            PeakPicker(band: .mid, frameRate: trace.frameRate, minimumInterval: RhythmAnalyzer.hitSpacing[.mid]!),    // 2–6 k wires
+            PeakPicker(band: .high, frameRate: trace.frameRate, minimumInterval: RhythmAnalyzer.hitSpacing[.high]!),  // 6–16 k cymbals
         ]
         let columns = [0, 1, 3, 4]
         var peaks: [[Double]] = [[], [], [], []]

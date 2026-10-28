@@ -237,6 +237,48 @@ private func errors(_ times: [Double], to targets: [Double]) -> [Double] {
         #expect(draw.held < 0.01 && between.max()! < 0.05, "held \(draw.held)")
     }
 
+    /// Dense hi-hats — 16 a second, 32nds at 120 BPM — are each heard, so the glints get as
+    /// dense as they are.
+    @Test func denseHighHitsAreEachHeard() {
+        let hats = Score.steady(bpm: 960, to: 12, band: .high, strength: 6)
+        let run = Run(Score(hits: hats.map { (time: $0.0, band: $0.1, strength: $0.2) }, duration: 12).frames())
+        let heard = run.events.filter { if case .lift(let time, .high, _, _) = $0.event { time > 4 } else { false } }.count
+        let played = hats.filter { $0.0 > 4 && $0.0 < 11.8 }.count
+        #expect(Double(heard) >= 0.9 * Double(played), "heard \(heard) of \(played)")
+    }
+
+    /// A low band holding next to nothing of the mix — a chord's leak, a chime's spill — does not
+    /// draw, however it moves against itself; one holding most of it draws as before.
+    @Test func faintLowEndDoesNotDraw() {
+        func drawn(lowShare: Double) -> Double {
+            var draw = LowDraw()
+            var time = 0.0
+            for _ in 0..<600 { time += 0.01; draw.push(time: time, level: 0.45, share: lowShare) }
+            time += 0.01
+            draw.push(time: time, level: 0.95, share: lowShare)
+            return draw.value
+        }
+        #expect(drawn(lowShare: 0.03) < 0.01)
+        #expect(drawn(lowShare: 0.9) > 0.9)
+    }
+
+    /// Low and mid hits count only as a real part of their band: not in a band holding next to
+    /// nothing of the mix, nor (mid) a rise that is a speck of what the band holds. High hits always.
+    @Test func faintSpillsAreNotHits() {
+        var shares = BandShares(frameRate: 93.75)
+        let bins = shares.binCounts
+        // A steady mix: mid holds a level of 1 per bin, low next to nothing, high a little.
+        for _ in 0..<60 { shares.push(Bands(low: 1e-6 * bins.low, mid: bins.mid, high: 0.1 * bins.high)) }
+        func hit(_ band: Bands.Band, rise: Double) -> Hit { Hit(time: 1, band: band, strength: 5, magnitude: rise) }
+        #expect(!shares.counts(hit(.mid, rise: 0.05)), "a speck of the mid")
+        #expect(shares.counts(hit(.mid, rise: 0.8)), "a real mid hit")
+        #expect(!shares.counts(hit(.low, rise: 1)), "a band holding nothing")
+        #expect(shares.counts(hit(.high, rise: 1e-9)), "high hits are left alone")
+        // Under a loud bass, a kick rising little against the band is still a kick.
+        for _ in 0..<60 { shares.push(Bands(low: 100 * bins.low, mid: bins.mid, high: 0.1 * bins.high)) }
+        #expect(shares.counts(hit(.low, rise: 0.5)), "a small kick under a loud bass")
+    }
+
     /// Only the heaviest kicks of the last seconds count, sized against the big ones.
     @Test func onlyHeavyKicksBurn() {
         var kicks = HeavyHits()
@@ -248,6 +290,21 @@ private func errors(_ times: [Double], to targets: [Double]) -> [Double] {
         // Every heavy kick once ranking has enough history (8 s), never a light one.
         #expect(fired.count >= 5, "fired at \(fired.map(\.beat))")
         #expect(fired.allSatisfy { $0.beat % 4 == 0 && $0.strength > 0.9 }, "\(fired)")
+    }
+
+    /// Near-equal hits rank together: a backbeat of snares a few percent apart over lighter hits
+    /// is heavy throughout, not only where one came out a hair bigger.
+    @Test func equalHitsRankTogether() {
+        var hits = HeavyHits()
+        var heavy = 0, snares = 0
+        for beat in 0..<40 {
+            let time = Double(beat) * 0.5
+            let snare = beat % 2 == 1
+            let size = snare ? 0.95 + 0.05 * Double(beat % 3) / 2 : 0.4
+            if hits.push(time: time, size: size) != nil, time > 8 { heavy += snare ? 1 : 100 }
+            if snare, time > 8 { snares += 1 }
+        }
+        #expect(heavy >= snares - 1 && heavy < 100, "heavy snares \(heavy % 100) of \(snares), light ones \(heavy / 100)")
     }
 
     /// Each band stands on its own: a snare landing with a kick lifts, and the kick under it

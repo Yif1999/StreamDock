@@ -66,9 +66,9 @@ import Testing
     let blue = RGB(40, 90, 230), orange = RGB(240, 150, 40)
 
     /// Runs a glow for `seconds` at 60 fps with a steady snapshot and events at the start.
-    func run(_ glow: MusicGlow, seconds: Double, draw: Double = 0, events: [RhythmEvent] = [], from start: Double = 0) -> [[LightPixel]] {
+    func run(_ glow: MusicGlow, seconds: Double, draw: Double = 0, intensity: Double = 1, events: [RhythmEvent] = [], from start: Double = 0) -> [[LightPixel]] {
         var snapshot = RhythmSnapshot()
-        snapshot.intensity = 1
+        snapshot.intensity = intensity
         snapshot.loudness = Bands(low: 0.5, mid: 0.5, high: 0.5)
         snapshot.lowDraw = draw
         return (1...Int(seconds * 60)).map { frame in
@@ -403,7 +403,7 @@ import Testing
         #expect(LightLayout.ring.allSatisfy { busy[$0].level < before[$0].level + 0.05 }, "no glint right after a snare")
     }
 
-    /// A cymbal is a crisp, whitish point.
+    /// A cymbal is crisp, whitish points — `glintCount` of them, apart.
     @Test func highHitsGlint() {
         let glinting = glow(.high), control = glow(.high)
         _ = run(glinting, seconds: 1); _ = run(control, seconds: 1)
@@ -411,9 +411,41 @@ import Testing
         let before = run(control, seconds: 0.05, from: 1).last!
         let rises = LightLayout.ring.map { peak[$0].level - before[$0].level }
         let lit = rises.filter { $0 > 0.15 }.count
-        #expect((1...3).contains(lit), "LEDs lit by the glint: \(lit)")
+        #expect((GlowBudget.glintCount.lowerBound...3 * GlowBudget.glintCount.upperBound).contains(lit), "LEDs lit by the glints: \(lit)")
+        // Separate points, not one wide one: lit LEDs come in as many runs as there are glints.
+        let runs = rises.indices.filter { rises[$0] > 0.15 && rises[($0 + rises.count - 1) % rises.count] <= 0.15 }.count
+        #expect(GlowBudget.glintCount.contains(runs), "glint spots: \(runs)")
         let spot = LightLayout.ring[rises.firstIndex(of: rises.max()!)!]
         #expect(whiteness(peak[spot]) > whiteness(before[spot]) + 0.05)
+    }
+
+    /// How many points a high hit lights varies from hit to hit, over the whole `glintCount` range.
+    @Test func glintCountsVary() {
+        let glow = glow(.high)
+        _ = run(glow, seconds: 1)
+        var seen = Set<Int>()
+        for hit in 0..<30 {
+            let time = 1 + Double(hit) * 0.5
+            let quiet = run(glow, seconds: 0.4, from: time - 0.4).last!
+            let peak = run(glow, seconds: 0.05, events: [.lift(time: time, band: .high, strength: 1, heavy: false)], from: time).last!
+            let rises = LightLayout.ring.map { peak[$0].level - quiet[$0].level }
+            seen.insert(rises.indices.filter { rises[$0] > 0.15 && rises[($0 + rises.count - 1) % rises.count] <= 0.15 }.count)
+        }
+        #expect(seen == Set(GlowBudget.glintCount), "spots per hit seen: \(seen.sorted())")
+    }
+
+    /// Cymbals on their own glint as brightly with no kick or snare about (intensity 0, which
+    /// counts only the low and mid) as in a busy passage.
+    @Test func cymbalsAloneStillGlint() {
+        func rise(intensity: Double) -> Double {
+            let glinting = glow(.high), control = glow(.high)
+            _ = run(glinting, seconds: 3, intensity: intensity); _ = run(control, seconds: 3, intensity: intensity)
+            let peak = run(glinting, seconds: 0.05, intensity: intensity, events: [.lift(time: 3, band: .high, strength: 1, heavy: false)], from: 3).last!
+            let before = run(control, seconds: 0.05, intensity: intensity, from: 3).last!
+            return LightLayout.ring.map { peak[$0].level - before[$0].level }.max()!
+        }
+        let alone = rise(intensity: 0), busy = rise(intensity: 1)
+        #expect(alone > 0.2 && alone > 0.8 * busy, "alone \(alone), busy \(busy)")
     }
 
     /// Deepening takes a pale color to the vivid form of its hue; white stays white without a hue to give.

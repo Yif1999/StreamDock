@@ -28,6 +28,25 @@ public final class FeatureExtractor {
     /// Whether frames carry the detail bands (`detailEdges`).
     public var computesDetail = true
     public var frameRate: Double { sampleRate / Double(Self.hopSize) }
+    /// How many FFT bins each band spans.
+    public var binCounts: Bands { Self.binCounts(sampleRate: sampleRate) }
+
+    public static func binCounts(sampleRate: Double) -> Bands {
+        var counts = Bands()
+        for (band, bins) in bins(edges: bandEdges.map(\.1), sampleRate: sampleRate).enumerated().map({ (bandEdges[$0].0, $1) }) {
+            counts[band] = Double(bins.count)
+        }
+        return counts
+    }
+
+    static func bins(edges: [ClosedRange<Double>], sampleRate: Double) -> [Range<Int>] {
+        let binWidth = sampleRate / Double(frameSize)
+        return edges.map { range in
+            let first = max(1, Int((range.lowerBound / binWidth).rounded(.up)))
+            let last = min(frameSize / 2 - 1, Int((range.upperBound / binWidth).rounded(.down)))
+            return first..<max(first + 1, last + 1)
+        }
+    }
 
     private let log2n = vDSP_Length(10)
     private let fftSetup: FFTSetup
@@ -46,17 +65,8 @@ public final class FeatureExtractor {
         self.sampleRate = sampleRate
         fftSetup = vDSP_create_fftsetup(log2n, FFTRadix(kFFTRadix2))!
         window = vDSP.window(ofType: Float.self, usingSequence: .hanningDenormalized, count: Self.frameSize, isHalfWindow: false)
-        let binWidth = sampleRate / Double(Self.frameSize)
-        bandBins = Self.bandEdges.map { band, range in
-            let first = max(1, Int((range.lowerBound / binWidth).rounded(.up)))
-            let last = min(Self.frameSize / 2 - 1, Int((range.upperBound / binWidth).rounded(.down)))
-            return (band, first..<max(first + 1, last + 1))
-        }
-        detailBins = Self.detailEdges.map { range in
-            let first = max(1, Int((range.lowerBound / binWidth).rounded(.up)))
-            let last = min(Self.frameSize / 2 - 1, Int((range.upperBound / binWidth).rounded(.down)))
-            return first..<max(first + 1, last + 1)
-        }
+        bandBins = Array(zip(Self.bandEdges.map(\.0), Self.bins(edges: Self.bandEdges.map(\.1), sampleRate: sampleRate)))
+        detailBins = Self.bins(edges: Self.detailEdges, sampleRate: sampleRate)
         detailScale = Self.detailEdges.map { _ in AdaptiveScale(.mean, seconds: 10, floor: 1e-3) }
         for band in Bands.Band.allCases {
             fluxScale[band] = AdaptiveScale(.mean, seconds: 10, floor: 1e-3)
@@ -106,7 +116,7 @@ public final class FeatureExtractor {
         let logMagnitudes = magnitudes.map { log1pf(Self.compression * $0) }
 
         let dt = Double(Self.hopSize) / sampleRate
-        var flux = Bands(), rawFlux = Bands(), loudness = Bands()
+        var flux = Bands(), rawFlux = Bands(), loudness = Bands(), energyNow = Bands()
         for (band, bins) in bandBins {
             var rise: Float = 0, linearRise: Float = 0, energy: Float = 0
             for bin in bins {
@@ -121,6 +131,7 @@ public final class FeatureExtractor {
                 flux[band] = fluxScale[band]!.normalize(Double(rise) / Double(bins.count), dt: dt)
             }
             loudness[band] = min(1, loudnessScale[band]!.normalize(rms, dt: dt))
+            energyNow[band] = Double(energy)
         }
         var detail: [Double] = [], detailRaw: [Double] = []
         if computesDetail, let previousLog, let previousMagnitudes {
@@ -140,6 +151,7 @@ public final class FeatureExtractor {
         let weights = FeatureFrame.onsetWeights
         let onset = weights.low * flux.low + weights.mid * flux.mid + weights.high * flux.high
         var frame = FeatureFrame(time: time, flux: flux, rawFlux: rawFlux, onset: onset, loudness: loudness)
+        frame.energy = energyNow
         frame.detail = detail
         frame.detailRaw = detailRaw
         return frame

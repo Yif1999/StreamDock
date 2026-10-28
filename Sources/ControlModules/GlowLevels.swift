@@ -153,12 +153,18 @@ struct GlowBudget {
     /// not a snap (2026-10-27: 0.035 s, peak ≈ 0.1 s, lit too suddenly) — while it spreads round
     /// the edge as fast as before (`spread`, by age, not by the envelope).
     static let liftAttack = 0.05, liftDecay = 0.55
-    /// Glint: size (`glintFloor` + (1 − `glintFloor`)·s)·intensity, `glintWidth` laps wide,
+    /// Glint: `glintCount` points per high hit — how many picked at random each time, 2 on
+    /// average — about evenly round the edge (2026-10-28: one point per hit looked too sparse,
+    /// always two too regular; still on the hits, never between them), each
+    /// size `glintFloor` + (1 − `glintFloor`)·s — the high band's own strength alone, not the
+    /// intensity, which counts only the low and mid hits and so fell to 0 a couple of seconds
+    /// into a passage of cymbals on their own, just where glints belong (2026-10-28) —
+    /// `glintWidth` laps wide,
     /// `glintWhite` of the way to the white, quick (`glintAttack`, `glintDecay`), at most one per
     /// `glintSpacing` s, never within `glintGap` laps of another lit glint, and only `glintQuiet`
     /// s after the last kick or mid lift with the draw under `glintQuietDraw`.
-    static let glintFloor = 0.5, glintWidth = 0.03, glintWhite = 0.5
-    static let glintAttack = 0.025, glintDecay = 0.18, glintSpacing = 0.09, glintGap = 0.12
+    static let glintCount = 1...3, glintFloor = 0.5, glintWidth = 0.03, glintWhite = 0.5
+    static let glintAttack = 0.025, glintDecay = 0.18, glintSpacing = 0.04, glintGap = 0.12
     static let glintQuiet = 0.6, glintQuietDraw = 0.15
 
     /// Rebound after the draw: a follower that keeps the draw's peaks and lets go over
@@ -192,8 +198,8 @@ struct GlowBudget {
         (liftFloor + (1 - liftFloor) * pow(min(1, max(0, strength)), liftCurve)) * intensity
     }
 
-    static func glint(strength: Double, intensity: Double) -> Double {
-        (glintFloor + (1 - glintFloor) * min(1, max(0, strength))) * intensity
+    static func glint(strength: Double) -> Double {
+        glintFloor + (1 - glintFloor) * min(1, max(0, strength))
     }
 
     static func reach(strength: Double) -> Double {

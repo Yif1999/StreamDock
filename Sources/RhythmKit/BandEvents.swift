@@ -54,11 +54,11 @@ struct BandReference {
 }
 
 /// A band's heaviest hits — the kicks of the low band, the heavy snares of the mid: hits in the
-/// top `topFraction` of the last `rankWindow` by size, at most one per `gap` (half a beat when
+/// top `topFraction` of the last `rankWindow` by size (hits within `tie` of each other ranked as equals), at most one per `gap` (half a beat when
 /// the tempo is known) unless a bigger one comes. Strength is the size against the band's big
 /// hits of the last minute, 0...1.
 struct HeavyHits {
-    static let rankWindow = 8.0, topFraction = 0.3, warmUp = 6
+    static let rankWindow = 8.0, topFraction = 0.3, warmUp = 6, tie = 0.1
     static let defaultGap = 0.25, gapRange = 0.2...0.35
 
     private var recent: [(time: Double, size: Double)] = []
@@ -71,7 +71,13 @@ struct HeavyHits {
         guard recent.count >= Self.warmUp else { return nil }
         let gap = beatPeriod.map { min(Self.gapRange.upperBound, max(Self.gapRange.lowerBound, $0 / 2)) } ?? Self.defaultGap
         guard time - last.time >= gap || size > last.size else { return nil }
-        let rank = Double(recent.filter { $0.size < size }.count) / Double(recent.count)
+        // Ranked with near-equal hits (within `tie`) counted as half below, half above — the usual
+        // way with ties: a backbeat of equally hard snares ranks together instead of only the few
+        // that came out a hair bigger (2026-10-28: a drum loop flashed on 1–2 of its 8 snares),
+        // while a run of equal light hits under a few heavy ones still ranks low.
+        let below = recent.filter { $0.size * (1 + Self.tie) < size }.count
+        let level = recent.filter { abs($0.size - size) <= Self.tie * max($0.size, size) }.count - 1
+        let rank = (Double(below) + 0.5 * Double(level)) / Double(recent.count)
         guard rank >= 1 - Self.topFraction else { return nil }
         last = (time, size)
         return min(1, size)
@@ -90,13 +96,18 @@ struct HeavyHits {
 ///   up to 1, over the held part.
 struct LowDraw {
     static let window = 6.0, floorPercentile = 0.2, topPercentile = 0.95, minimumSpan = 0.35
+    /// Both parts count only as far as the low band is a real part of the mix: from
+    /// `presentFrom` of its energy to `presentFull` (`BandShares.share`) — a chord's leak or a
+    /// chime's spill holds a few percent at most, a bass or kick most of it (2026-10-28).
+    static let presentFrom = 0.1, presentFull = 0.3
     static let heldWindow = 1.0, heldFloor = 0.15, heldFull = 0.4, heldMost = 0.7
     private var history = RollingWindow(seconds: window)
     private var recent = RollingWindow(seconds: heldWindow)
-    private(set) var held = 0.0, rising = 0.0
-    var value: Double { max(held, rising) }
+    private(set) var held = 0.0, rising = 0.0, present = 1.0
+    var value: Double { max(held, rising) * present }
 
-    mutating func push(time: Double, level: Double) {
+    mutating func push(time: Double, level: Double, share: Double = 1) {
+        present = RhythmAnalyzer.smoothstep((share - Self.presentFrom) / (Self.presentFull - Self.presentFrom))
         history.push(time: time, value: level)
         recent.push(time: time, value: level)
         let floor = history.percentile(Self.floorPercentile)
@@ -105,5 +116,56 @@ struct LowDraw {
         rising = min(1, max(0, (level - floor) / span))
         let under = recent.percentile(0.5)
         held = Self.heldMost * RhythmAnalyzer.smoothstep((under - Self.heldFloor) / (Self.heldFull - Self.heldFloor))
+    }
+}
+
+/// How much each band holds of the whole mix, and whether a low or mid hit is a real part of
+/// its band — not a faint spill. Every other measure judges a band against itself, so in a band
+/// holding next to nothing (a chime's spill into the low and mid, a chord's leak into the low)
+/// the faintest rise reads as a hit and a steady trace as a bass (2026-10-28).
+/// - `share`: the band's energy over the last `window` s as a part of all three bands'.
+/// - a low hit counts when the low band holds at least `lowFrom` of the mix (where the draw
+///   starts, `LowDraw.presentFrom`): a chord's leak holds ~3 %, a bass or kick most of it. Its
+///   rise is not judged: under a loud bass a kick rises little against the band and still is
+///   one (a song lost 4 of 42 kicks that way, 2026-10-28).
+/// - a mid hit counts when the mid band holds at least `midFrom` of the mix and the hit rises
+///   by at least `riseFrom` of what the band holds (raw rise per bin ÷ the band's level per
+///   bin): a chime's spill over a chord rises ~0.08 of it, a snare ~1.
+/// The high band is left as it is: its spills into the others are what this keeps out.
+public struct BandShares {
+    static let window = 0.5, lowFrom = LowDraw.presentFrom, midFrom = 0.01, riseFrom = 0.2
+    let binCounts: Bands
+    private var frames: [Bands] = []
+    private var sums = Bands()
+    private let length: Int
+
+    public init(frameRate: Double) {
+        binCounts = FeatureExtractor.binCounts(sampleRate: frameRate * Double(FeatureExtractor.hopSize))
+        length = max(1, Int(Self.window * frameRate))
+    }
+
+    public mutating func push(_ energy: Bands) {
+        frames.append(energy)
+        for band in Bands.Band.allCases { sums[band] += energy[band] }
+        if frames.count > length {
+            let gone = frames.removeFirst()
+            for band in Bands.Band.allCases { sums[band] = max(0, sums[band] - gone[band]) }
+        }
+    }
+
+    public func share(_ band: Bands.Band) -> Double {
+        let total = sums.low + sums.mid + sums.high
+        return total > 0 ? sums[band] / total : 0
+    }
+
+    func counts(_ hit: Hit) -> Bool {
+        guard !frames.isEmpty else { return true }
+        switch hit.band {
+        case .low: return share(.low) >= Self.lowFrom
+        case .mid:
+            let level = (sums[.mid] / Double(frames.count) / binCounts[.mid]).squareRoot()
+            return share(.mid) >= Self.midFrom && hit.magnitude >= Self.riseFrom * level
+        case .high: return true
+        }
     }
 }

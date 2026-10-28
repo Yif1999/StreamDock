@@ -87,6 +87,9 @@ public struct FeatureFrame: Sendable, Equatable {
     public var onset: Double
     /// Loudness per band, relative to its recent peak (0...1).
     public var loudness: Bands
+    /// Each band's energy as it is (sum of squared magnitudes over its bins) — comparable
+    /// between bands, for how much of the mix each one holds (`BandShares`). 0 when not known.
+    public var energy = Bands()
     /// Flux (normalised, like `flux`) and raw flux in `FeatureExtractor.detailEdges`, for
     /// offline study only; empty when not measured.
     public var detail: [Double] = []
