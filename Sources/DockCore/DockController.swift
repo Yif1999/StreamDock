@@ -37,6 +37,8 @@ public final class DockController {
     @ObservationIgnored private var firedKeys: Set<Int> = []
     /// A page turn in progress (`slidePage`); ordinary redraws wait for it.
     @ObservationIgnored private var pageTurn: Task<Void, Never>?
+    /// Between a round-key press and its slide starting (`activateScene`): redraws wait too.
+    @ObservationIgnored private var changingPage = false
     @ObservationIgnored private var shownFaces: [Int: ShownFace] = [:]
     @ObservationIgnored private var started = false
     @ObservationIgnored private var isConnecting = false
@@ -107,16 +109,19 @@ public final class DockController {
     public func activateScene(at index: Int) {
         guard scenes.indices.contains(index) else { return }
         releasePressedKeys()
+        // From here until the slide takes over, nothing draws: modules waking on the new page ask
+        // to redraw at once, which would flash the new page for a frame before it slides in.
+        let leaving = pageImages()
+        changingPage = true
         if index == activeSceneIndex {
-            let leaving = pageImages(), page = activeScene.currentPageIndex
+            let page = activeScene.currentPageIndex
             activeScene.advancePage()
             activePageIndex = activeScene.currentPageIndex
             updateLight(fade: 0.5)
             // A one-page scene has nowhere to turn to.
-            if activePageIndex == page { redrawAll() } else { slide(from: leaving, toward: (0, 1)) }
+            if activePageIndex == page { changingPage = false; redrawAll() } else { slide(from: leaving, toward: (0, 1)) }
             return
         }
-        let leaving = pageImages()
         let rightward = index > activeSceneIndex
         activeScene.deactivate()
         activeSceneIndex = index
@@ -321,6 +326,7 @@ public final class DockController {
     private func slide(from leaving: [Int: CGImage]?, toward: (x: Double, y: Double)) {
         pageTurn?.cancel()
         pageTurn = nil
+        changingPage = false
         guard let leaving, let arriving = pageImages() else { return redrawAll() }
         let slide = PageSlide(leaving: leaving, arriving: arriving, toward: toward)
         let start = ContinuousClock.now
@@ -328,7 +334,12 @@ public final class DockController {
             let grid = FrameGrid(framesPerSecond: PageSlide.framesPerSecond, start: start)
             var sent: [Int: Data] = [:]
             while true {
-                guard let self, !Task.isCancelled, let device = self.device, !self.displaysSleeping else { return }
+                guard let self, !Task.isCancelled else { return }
+                guard let device = self.device, !self.displaysSleeping else {
+                    // Unplugged or asleep mid-turn: stop, and let ordinary redraws through again.
+                    self.pageTurn = nil
+                    return
+                }
                 let t = min(1, KeyHold.seconds(ContinuousClock.now - start) / PageSlide.seconds)
                 if t >= 1 {
                     // The landed page, at full quality.
@@ -356,7 +367,7 @@ extension DockController: SceneHost {
     }
 
     func redraw(keys: [Int]) {
-        guard !displaysSleeping, pageTurn == nil, let device else { return }
+        guard !displaysSleeping, pageTurn == nil, !changingPage, let device else { return }
         var images: [Int: Data] = [:]
         for key in keys {
             let face = activeScene.face(forKey: key)

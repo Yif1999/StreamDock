@@ -1,5 +1,8 @@
 import Foundation
 import Observation
+import os
+
+private let cpaLog = Logger(subsystem: "StreamDock", category: "CPA")
 
 /// Reads the Codex and Claude quotas through CPA's management API: the account list, then one
 /// `api-call` GET per service, made by CPA with that account's credential (which never leaves
@@ -132,8 +135,15 @@ public final class CPAClient {
         // A failed query counts too: it is tried again when the interval runs out, or on a key press.
         for service in wanted { queried[service] = clock() }
         if quotas.isEmpty { status = .loading; onChange?() }
+        let began = ContinuousClock.now
+        func elapsed() -> String {
+            let gap = (ContinuousClock.now - began).components
+            return String(format: "%.2f s", Double(gap.seconds) + Double(gap.attoseconds) / 1e18)
+        }
+        cpaLog.notice("Querying \(wanted.map(\.name).sorted().joined(separator: ", "), privacy: .public)")
         do {
             let list = try await management(endpoint.authFiles, key: key)
+            cpaLog.notice("Account list after \(elapsed(), privacy: .public)")
             guard generation == stamp else { return }
             accounts = CPAAccount.list(list).sorted { $0.id < $1.id }
             for service in AIService.allCases where wanted.contains(service) {
@@ -146,15 +156,18 @@ public final class CPAClient {
                     guard generation == stamp else { return }
                     quotas[service] = service == .claude ? .claude(body) : .codex(body)
                     errors[service] = nil
+                    cpaLog.notice("\(service.name, privacy: .public) quota after \(elapsed(), privacy: .public)")
                 } catch {
                     guard generation == stamp else { return }
                     errors[service] = error.localizedDescription
+                    cpaLog.error("\(service.name, privacy: .public) quota failed after \(elapsed(), privacy: .public): \(error.localizedDescription, privacy: .public)")
                 }
             }
             status = .ready(Date())
         } catch {
             guard generation == stamp else { return }
             status = .failed(error.localizedDescription)
+            cpaLog.error("Account list failed after \(elapsed(), privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
         onChange?()
     }
