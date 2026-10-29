@@ -133,6 +133,8 @@ public final class CPAClient {
         defer { inFlight.subtract(wanted) }
         let stamp = generation
         // A failed query counts too: it is tried again when the interval runs out, or on a key press.
+        // One cut off (the scene left mid-way, which stops the poll) does not: it got no answer, so
+        // coming back queries again (`forgetIfCancelled`).
         for service in wanted { queried[service] = clock() }
         if quotas.isEmpty { status = .loading; onChange?() }
         let began = ContinuousClock.now
@@ -161,10 +163,20 @@ public final class CPAClient {
             status = .ready(Date())
         } catch {
             guard generation == stamp else { return }
+            if forgetIfCancelled(error, wanted) { return }
             status = .failed(error.localizedDescription)
             cpaLog.error("Account list failed after \(elapsed(), privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
         onChange?()
+    }
+
+    /// When a query was cut off rather than answered (the poll stopped as the scene went off
+    /// screen), forgets that it was made, so the next round asks again; returns whether it was.
+    private func forgetIfCancelled(_ error: Error, _ services: Set<AIService>) -> Bool {
+        guard Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled else { return false }
+        for service in services { queried[service] = nil }
+        cpaLog.notice("Query for \(services.map(\.name).sorted().joined(separator: ", "), privacy: .public) cut off; will ask again")
+        return true
     }
 
     /// One service's quota, as part of `refresh` (dropped if a reset came in meanwhile).
@@ -182,6 +194,7 @@ public final class CPAClient {
             cpaLog.notice("\(service.name, privacy: .public) quota after \(elapsed(), privacy: .public)")
         } catch {
             guard generation == stamp else { return }
+            if forgetIfCancelled(error, [service]) { return }
             errors[service] = error.localizedDescription
             cpaLog.error("\(service.name, privacy: .public) quota failed after \(elapsed(), privacy: .public): \(error.localizedDescription, privacy: .public)")
         }

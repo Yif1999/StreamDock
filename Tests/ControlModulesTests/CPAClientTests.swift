@@ -129,6 +129,33 @@ private final class FakeCPA: @unchecked Sendable {
         #expect(await client.refreshStale() == .seconds(300))  // Both fresh: the next round is a full interval away.
     }
 
+    @Test func aQueryCutOffByLeavingTheSceneIsAskedAgainOnReturn() async throws {
+        let (defaults, cleanup) = temporaryDefaults()
+        defer { cleanup() }
+        let fake = FakeCPA()
+        let secrets = MemorySecrets()
+        secrets.values["https://cpa.example.com"] = "k"
+        defaults.set("https://cpa.example.com", forKey: "cpaAddress")
+        final class Gate: @unchecked Sendable { var slow = true }
+        let gate = Gate()
+        let client = CPAClient(defaults: defaults, secrets: secrets, send: { request in
+            // The first time the network hangs until the scene is left.
+            if gate.slow { try await Task.sleep(for: .seconds(30)) }
+            return fake.send(request)
+        })
+        client.start()
+        try await Task.sleep(for: .milliseconds(100))
+        client.stop()   // Left the scene mid-query.
+        try await Task.sleep(for: .milliseconds(100))
+        gate.slow = false
+        // Back on screen within the five minutes: it was never answered, so it asks again.
+        client.start()
+        let deadline = ContinuousClock.now + .seconds(3)
+        while client.quotas.count < 2 && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        client.stop()
+        #expect(client.quotas.count == 2)
+    }
+
     @Test func keysShowWhatIsLeftOverAFillInTheServiceColor() async throws {
         let (defaults, cleanup) = temporaryDefaults()
         defer { cleanup() }
