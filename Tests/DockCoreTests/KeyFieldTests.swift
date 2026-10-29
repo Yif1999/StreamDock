@@ -30,4 +30,18 @@ struct KeyFieldTests {
         #expect(at(two, 0, 10) == 255 && at(two, 3, 19) == 255 && at(two, 4, 10) == 0 && at(two, 0, 9) == 0)
         #expect(at(six, 60, 10) == 0)
     }
+
+    @Test func picturesLandUprightWhereTheyAreDrawn() throws {
+        // A 64×64 picture, white in its top 16 rows (raster order), drawn half a key into key 2.
+        let picture = KeyField()
+        picture.context.setFillColor(CGColor(gray: 1, alpha: 1))
+        picture.context.fill(CGRect(x: 0, y: 0, width: 64, height: 16))
+        let source = try #require(picture.keyImages()[1])
+        let field = KeyField()
+        field.draw(source, x: 96 + 32, y: 0)
+        let two = try #require(field.keyImages()[2])
+        let data = two.dataProvider!.data! as Data
+        func at(_ x: Int, _ y: Int) -> UInt8 { data[y * two.bytesPerRow + x * 4] }
+        #expect(at(40, 5) == 255 && at(40, 20) == 0 && at(20, 5) == 0)
+    }
 }

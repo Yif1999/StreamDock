@@ -17,6 +17,7 @@
 //   dock-probe ledcorners [fl fr br bl]  find the four corners on the ring with the round keys (calibration)
 //   dock-probe satsteps [hue] [percent…]  one hue at falling saturation (100 % … 40 %), announced aloud
 //   dock-probe glowdemo high  the music light's high-frequency glints on their own, then under drums
+//   dock-probe slidetest [fps] [quality] [seconds]  page turns as the app plays them, with frame sizes
 //   dock-probe lightease       light-strip cross-fades on three curves (current, keys', softer), announced
 //   dock-probe digitdemo       numbers counting in place (volume, brightness, a percentage)
 //   dock-probe pressdemo       the press feedback on typical keys (release build)
@@ -1093,6 +1094,8 @@ case "cpa":
         done.signal()
     }
     done.wait()
+case "slidetest":
+    try SlideTest.run(Array(arguments.dropFirst()))
 case "lightease":
     try LightEase.run()
 case "digitdemo":

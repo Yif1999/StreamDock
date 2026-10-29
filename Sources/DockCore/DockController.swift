@@ -1,3 +1,4 @@
+import CoreGraphics
 import DockKit
 import Foundation
 import Observation
@@ -34,6 +35,8 @@ public final class DockController {
     /// Held keys whose long press has fired: they turn back up at once, though still held, and
     /// stay up until let go (docs/design.md, 按下与长按).
     @ObservationIgnored private var firedKeys: Set<Int> = []
+    /// A page turn in progress (`slidePage`); ordinary redraws wait for it.
+    @ObservationIgnored private var pageTurn: Task<Void, Never>?
     @ObservationIgnored private var shownFaces: [Int: ShownFace] = [:]
     @ObservationIgnored private var started = false
     @ObservationIgnored private var isConnecting = false
@@ -105,18 +108,22 @@ public final class DockController {
         guard scenes.indices.contains(index) else { return }
         releasePressedKeys()
         if index == activeSceneIndex {
+            let leaving = pageImages(), page = activeScene.currentPageIndex
             activeScene.advancePage()
             activePageIndex = activeScene.currentPageIndex
             updateLight(fade: 0.5)
-            redrawAll()
+            // A one-page scene has nowhere to turn to.
+            if activePageIndex == page { redrawAll() } else { slide(from: leaving, toward: (0, 1)) }
             return
         }
+        let leaving = pageImages()
+        let rightward = index > activeSceneIndex
         activeScene.deactivate()
         activeSceneIndex = index
         activePageIndex = activeScene.currentPageIndex
         activeScene.activate()
         updateLight(fade: 0.5)
-        redrawAll()
+        slide(from: leaving, toward: (rightward ? 1 : -1, 0))
     }
 
     public func ledColor(for scene: DockScene) -> RGB {
@@ -296,6 +303,51 @@ public final class DockController {
     private func redrawAll() {
         redraw(keys: Array(1...M18Layout.lcdKeyCount))
     }
+
+    // MARK: - Page turn
+
+    /// Every key of the page on screen, as drawn now (nil when nothing is shown).
+    private func pageImages() -> [Int: CGImage]? {
+        guard !displaysSleeping, device != nil else { return nil }
+        var images: [Int: CGImage] = [:]
+        for key in 1...M18Layout.lcdKeyCount {
+            images[key] = KeyRenderer.image(for: activeScene.face(forKey: key))
+        }
+        return images
+    }
+
+    /// Slides the page on screen away for the one now there (`PageSlide`). Ordinary redraws wait
+    /// until it lands; a new change mid-way starts over from the old page's picture.
+    private func slide(from leaving: [Int: CGImage]?, toward: (x: Double, y: Double)) {
+        pageTurn?.cancel()
+        pageTurn = nil
+        guard let leaving, let arriving = pageImages() else { return redrawAll() }
+        let slide = PageSlide(leaving: leaving, arriving: arriving, toward: toward)
+        let start = ContinuousClock.now
+        pageTurn = Task { [weak self] in
+            let grid = FrameGrid(framesPerSecond: PageSlide.framesPerSecond, start: start)
+            var sent: [Int: Data] = [:]
+            while true {
+                guard let self, !Task.isCancelled, let device = self.device, !self.displaysSleeping else { return }
+                let t = min(1, KeyHold.seconds(ContinuousClock.now - start) / PageSlide.seconds)
+                if t >= 1 {
+                    // The landed page, at full quality.
+                    self.pageTurn = nil
+                    self.shownFaces = [:]
+                    self.redrawAll()
+                    return
+                }
+                var images: [Int: Data] = [:]
+                for (key, image) in slide.frame(at: t) {
+                    guard let jpeg = KeyRenderer.jpeg(image, quality: KeyRenderer.motionQuality), sent[key] != jpeg else { continue }
+                    images[key] = jpeg
+                    sent[key] = jpeg
+                }
+                device.setKeyImages(images)
+                do { try await grid.sleep() } catch { return }
+            }
+        }
+    }
 }
 
 extension DockController: SceneHost {
@@ -304,7 +356,7 @@ extension DockController: SceneHost {
     }
 
     func redraw(keys: [Int]) {
-        guard !displaysSleeping, let device else { return }
+        guard !displaysSleeping, pageTurn == nil, let device else { return }
         var images: [Int: Data] = [:]
         for key in keys {
             let face = activeScene.face(forKey: key)

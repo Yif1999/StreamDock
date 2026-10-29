@@ -23,6 +23,17 @@ public struct KeyField {
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
     }
 
+    /// Draws a picture upright with its top-left corner at (x, y) on the field.
+    public func draw(_ image: CGImage, x: Double, y: Double) {
+        let height = Double(image.height)
+        context.saveGState()
+        // The field is drawn y down; a picture drawn straight in would come out upside down.
+        context.translateBy(x: x, y: y + height)
+        context.scaleBy(x: 1, y: -1)
+        context.draw(image, in: CGRect(x: 0, y: 0, width: Double(image.width), height: height))
+        context.restoreGState()
+    }
+
     /// Each key's piece of the field.
     public func keyImages() -> [Int: CGImage] {
         guard let whole = context.makeImage() else { return [:] }
