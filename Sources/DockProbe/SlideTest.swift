@@ -3,16 +3,19 @@ import DockCore
 import DockKit
 import Foundation
 
-/// `dock-probe slidetest [fps] [quality] [seconds]`: page turns between two typical pages, as the
-/// controller plays them (`PageSlide`), at a given frame rate, JPEG quality in motion and length
-/// (defaults: `PageSlide`'s). Prints the bytes a frame takes at a few qualities, then plays
-/// across (right, left) and down (twice each), announced aloud. Quit the app first; release build.
+/// `dock-probe slidetest [fps] [quality] [seconds] [shutter…]`: page turns between two typical
+/// pages, as the controller plays them (`PageSlide`), at a given frame rate, JPEG quality in
+/// motion and length (defaults: `PageSlide`'s). Prints the bytes a frame takes at a few
+/// qualities, then for each shutter (a share of a frame's time the motion blur spans; default
+/// 0, then 0.5 and 1) plays across (right, left) and down, announced aloud. Quit the app first;
+/// release build. `--cost`: only what a slide costs at each shutter, without the device.
 @MainActor enum SlideTest {
     static func run(_ arguments: [String]) throws {
         let numbers = arguments.compactMap(Double.init)
         let fps = numbers.count > 0 ? numbers[0] : PageSlide.framesPerSecond
         let quality = numbers.count > 1 ? numbers[1] : KeyRenderer.motionQuality
         let seconds = numbers.count > 2 ? numbers[2] : PageSlide.seconds
+        let shutters = numbers.count > 3 ? Array(numbers[3...]) : [0, 0.5, 1]
         let daily: [KeyFace] = [
             KeyFace(symbol: "speaker.wave.1.fill"), KeyFace(title: "45", caption: "Volume"), KeyFace(symbol: "speaker.wave.3.fill"),
             KeyFace(symbol: "hifispeaker", caption: "LG Display"), KeyFace(symbol: "mic", caption: "DJI Mic"),
@@ -35,18 +38,35 @@ import Foundation
         }
         let pages = [images(daily), images(home)]
         // What a mid-slide frame costs.
-        let middle = PageSlide(leaving: pages[0], arriving: pages[1], toward: (1, 0)).frame(at: 0.5)
+        let middle = PageSlide(leaving: pages[0], arriving: pages[1], toward: (1, 0)).frame(at: 0.5, exposure: 0.5 / fps / seconds)
         for q in [1.0, 0.8, 0.6, 0.4] {
             let bytes = middle.values.compactMap { KeyRenderer.jpeg($0, quality: q)?.count }.reduce(0, +)
             print(String(format: "quality %.1f: %d bytes a frame (15 keys), %.0f KB/s at %d fps", q, bytes, Double(bytes) * fps / 1000, Int(fps)))
         }
+        // What a whole slide costs at each shutter: drawing time per frame and bytes sent.
+        for shutter in [0, 0.5, 1.0] {
+            let slide = PageSlide(leaving: pages[0], arriving: pages[1], toward: (1, 0))
+            let frames = Int(seconds * fps)
+            var worst = 0.0, total = 0.0, bytes = 0
+            for frame in 1...frames {
+                let start = ContinuousClock.now
+                let images = slide.frame(at: Double(frame) / Double(frames), exposure: shutter / fps / seconds)
+                bytes += images.values.compactMap { KeyRenderer.jpeg($0, quality: quality)?.count }.reduce(0, +)
+                let ms = ProbeClock.seconds(since: start) * 1000
+                worst = max(worst, ms); total += ms
+            }
+            print(String(format: "shutter %3d°: %.1f ms a frame on average, %.1f ms at worst (budget %.1f); %d KB over the slide",
+                         Int(shutter * 360), total / Double(frames), worst, 1000 / fps, bytes / 1000))
+        }
+        if arguments.contains("--cost") { return }
         guard let identity = M18Device.attached().first else { print("no M18 attached"); return }
         let device = try M18Device(opening: identity) { _ in }
         device.setScreenBrightness(80)
         func show(_ page: [Int: CGImage]) {
             device.setKeyImages(Dictionary(uniqueKeysWithValues: page.compactMap { key, image in KeyRenderer.jpeg(image).map { (key, $0) } }))
         }
-        func play(_ from: Int, _ toward: (x: Double, y: Double)) {
+        func play(_ from: Int, _ toward: (x: Double, y: Double), shutter: Double) {
+            let exposure = shutter / fps / seconds
             let slide = PageSlide(leaving: pages[from], arriving: pages[1 - from], toward: toward)
             let grid = FrameGrid(framesPerSecond: fps)
             var sent: [Int: Data] = [:]
@@ -54,7 +74,7 @@ import Foundation
                 let t = min(1, ProbeClock.seconds(since: grid.start) / seconds)
                 if t >= 1 { break }
                 var frame: [Int: Data] = [:]
-                for (key, image) in slide.frame(at: t) {
+                for (key, image) in slide.frame(at: t, exposure: exposure) {
                     guard let jpeg = KeyRenderer.jpeg(image, quality: quality), sent[key] != jpeg else { continue }
                     frame[key] = jpeg
                     sent[key] = jpeg
@@ -70,10 +90,11 @@ import Foundation
             (try? Process.run(URL(fileURLWithPath: "/usr/bin/say"), arguments: [text]))?.waitUntilExit()
         }
         show(pages[0])
-        say("\(Int(fps)) 帧，横向换场景")
-        for _ in 0..<2 { play(0, (1, 0)); play(1, (-1, 0)) }
-        say("纵向翻页")
-        for _ in 0..<2 { play(0, (0, 1)); play(1, (0, 1)) }
+        for shutter in shutters {
+            say(shutter == 0 ? "不模糊" : "动态模糊，快门 \(Int(shutter * 360)) 度")
+            play(0, (1, 0), shutter: shutter); play(1, (-1, 0), shutter: shutter)
+            play(0, (0, 1), shutter: shutter); play(1, (0, 1), shutter: shutter)
+        }
         device.clearKeys(Array(1...15))
         device.waitUntilIdle()
         device.close(notifyDevice: true)

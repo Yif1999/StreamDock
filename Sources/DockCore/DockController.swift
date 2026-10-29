@@ -349,7 +349,7 @@ public final class DockController {
                     return
                 }
                 var images: [Int: Data] = [:]
-                for (key, image) in slide.frame(at: t) {
+                for (key, image) in slide.frame(at: t, exposure: PageSlide.exposure) {
                     guard let jpeg = KeyRenderer.jpeg(image, quality: KeyRenderer.motionQuality), sent[key] != jpeg else { continue }
                     images[key] = jpeg
                     sent[key] = jpeg

@@ -44,4 +44,21 @@ struct KeyFieldTests {
         func at(_ x: Int, _ y: Int) -> UInt8 { data[y * two.bytesPerRow + x * 4] }
         #expect(at(40, 5) == 255 && at(40, 20) == 0 && at(20, 5) == 0)
     }
+
+    @Test func aPageTurnBlursWhereItIsFastAndIsSharpWhereItIsSlow() throws {
+        // Every key of the leaving page white, the arriving page black, sliding in from the right.
+        let white = KeyField()
+        white.context.setFillColor(CGColor(gray: 1, alpha: 1))
+        white.context.fill(CGRect(x: 0, y: 0, width: 448, height: 256))
+        let page = white.keyImages()
+        let black = KeyField().keyImages()
+        let slide = PageSlide(leaving: page, arriving: black, toward: (1, 0))
+        func greys(_ t: Double) -> Int {
+            let image = slide.frame(at: t, exposure: PageSlide.exposure)[8]!
+            let data = image.dataProvider!.data! as Data
+            return (0..<64).filter { x in (1...254).contains(data[32 * image.bytesPerRow + x * 4]) }.count
+        }
+        // Mid-way the edge is a streak of greys; near the start it barely moves and stays sharp.
+        #expect(greys(0.5) > 8 && greys(0.02) <= 1)
+    }
 }
