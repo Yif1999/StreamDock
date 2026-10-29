@@ -26,6 +26,7 @@
 //   dock-probe keyease [scene…]  the shared motion curve on the keys: linear vs ease, stretch, drop, pop
 //   dock-probe keyglide [path…]  a disc gliding across the keys on the real key layout (KeyField)
 //   dock-probe keywindows      a ruler on every key, photographed to measure the key layout (calibration)
+//   dock-probe chordtest [--guide [rows|cols]] [seconds]  keys held together: every press and release the device reports
 //   dock-probe hookpreview   what loading the Codex / Claude hooks would write (writes nothing)
 
 import AppKit
@@ -1110,6 +1111,8 @@ case "keyease":
     try KeyEase.run(Array(arguments.dropFirst()))
 case "keyglide":
     try KeyGlide.run(Array(arguments.dropFirst()))
+case "chordtest":
+    try ChordTest.run(Array(arguments.dropFirst()))
 case "keywindows":
     try KeyWindows.run(Array(arguments.dropFirst()))
 case "preview":
