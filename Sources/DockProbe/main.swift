@@ -17,7 +17,14 @@
 //   dock-probe ledcorners [fl fr br bl]  find the four corners on the ring with the round keys (calibration)
 //   dock-probe satsteps [hue] [percent…]  one hue at falling saturation (100 % … 40 %), announced aloud
 //   dock-probe glowdemo high  the music light's high-frequency glints on their own, then under drums
-//   dock-probe hookpreview     what loading the Codex / Claude hooks would write (writes nothing)
+//   dock-probe digitdemo       numbers counting in place (volume, brightness, a percentage)
+//   dock-probe pressdemo       the press feedback on typical keys (release build)
+//   dock-probe quotademo       the quota gauges gliding to new readings, then cut in hard for comparison
+//   dock-probe holddemo        the long-press ring on three keys: held through, and let go early (release build)
+//   dock-probe keyease [scene…]  the shared motion curve on the keys: linear vs ease, stretch, drop, pop
+//   dock-probe keyglide [path…]  a disc gliding across the keys on the real key layout (KeyField)
+//   dock-probe keywindows      a ruler on every key, photographed to measure the key layout (calibration)
+//   dock-probe hookpreview   what loading the Codex / Claude hooks would write (writes nothing)
 
 import AppKit
 import ImageIO
@@ -61,7 +68,7 @@ final class ProbeModule: DockModule {
     try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
     for (name, face) in faces {
         for pressed in [false, true] {
-            guard let image = KeyRenderer.image(for: face, pressed: pressed) else { continue }
+            guard let image = KeyRenderer.image(for: face, press: pressed ? 1 : 0) else { continue }
             let png = NSBitmapImageRep(cgImage: image).representation(using: .png, properties: [:])!
             let path = "\(directory)/\(name)\(pressed ? "-pressed" : "").png"
             try png.write(to: URL(fileURLWithPath: path))
@@ -112,16 +119,16 @@ case "keysheet":
     try writeKeySheet(to: output, artwork: art, pressed: arguments.contains("--pressed"))
     print("wrote \(output)")
 case "holdsheet":
-    // dock-probe holdsheet <out.png> [artwork]: the long-press line on the three hold keys,
-    // pressed, at 0 / ¼ / ½ / ¾ / full (3×).
+    // dock-probe holdsheet <out.png> [artwork]: the long-press ring on the three hold keys,
+    // pressed: closing in (0.1, 0.2), ½, full, then the response (flash) part way (3×).
     let positional = arguments.dropFirst().filter { !$0.hasPrefix("--") }
     let output = positional.first ?? "build/holdsheet.png"
     let art = positional.dropFirst().first.flatMap { FileManager.default.contents(atPath: $0) }
-    let steps = [0, 0.25, 0.5, 0.75, 1.0]
-    let rows: [(Double) -> CGImage?] = [
-        { KeyDesign.image(symbol: "moon.fill", label: "Sleep", hold: $0, pressed: true) },
-        { KeyDesign.image(value: "86W", label: "PC", tone: .on, hold: $0, pressed: true) },
-        { KeyDesign.image(symbol: "music.note", label: art == nil ? "Music" : nil, artwork: art, hold: $0, pressed: true) },
+    let steps: [HoldPhase] = [.holding(0.1), .holding(0.2), .holding(0.5), .holding(0.999), .confirmed(0.3), .confirmed(0.7)]
+    let rows: [(HoldPhase) -> CGImage?] = [
+        { KeyDesign.image(symbol: "moon.fill", label: "Sleep", hold: $0, press: 1) },
+        { KeyDesign.image(value: "86W", label: "PC", tone: .on, hold: $0, press: 1) },
+        { KeyDesign.image(symbol: "music.note", label: art == nil ? "Music" : nil, artwork: art, hold: $0, press: 1) },
     ]
     let zoom = 3, cell = 64 * zoom, gap = 24
     let width = steps.count * cell + (steps.count + 1) * gap, height = rows.count * cell + (rows.count + 1) * gap
@@ -1085,6 +1092,20 @@ case "cpa":
         done.signal()
     }
     done.wait()
+case "digitdemo":
+    try DigitDemo.run()
+case "pressdemo":
+    try PressDemo.run()
+case "quotademo":
+    try QuotaDemo.run()
+case "holddemo":
+    try HoldDemo.run(Array(arguments.dropFirst()))
+case "keyease":
+    try KeyEase.run(Array(arguments.dropFirst()))
+case "keyglide":
+    try KeyGlide.run(Array(arguments.dropFirst()))
+case "keywindows":
+    try KeyWindows.run(Array(arguments.dropFirst()))
 case "preview":
     try preview(into: arguments.dropFirst().first ?? "build/preview")
 case "run":
@@ -1219,7 +1240,7 @@ struct SheetKey {
     func render(_ key: SheetKey) -> CGImage? {
         let art = key.app.flatMap(AIQuotaModule.icon(for:)) ?? (key.artwork ? artwork : nil)
         return KeyDesign.image(symbol: key.symbol, value: key.value, label: key.label, tone: key.tone,
-                               artwork: art, meter: key.meter, pressed: pressed)
+                               artwork: art, meter: key.meter, press: pressed ? 1 : 0)
     }
     let panels: [(String, [CGImage?])] = [
         ("第 1 页 · 日常控制", daily.map(render)),

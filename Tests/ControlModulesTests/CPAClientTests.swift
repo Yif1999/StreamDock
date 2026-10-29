@@ -140,6 +140,11 @@ private final class FakeCPA: @unchecked Sendable {
         client.choose("codex-b-plus.json", for: .codex)
         await client.refresh()
         module.now = { ISO8601DateFormatter().date(from: "2026-10-25T03:00:00Z")! }
+        // The gauges fill up from empty to their first reading, then hold it.
+        #expect(module.face(forSlot: 1).meter!.fraction < 0.05)
+        _ = (module.face(forSlot: 2), module.face(forSlot: 6))
+        let deadline = ContinuousClock.now + .seconds(3)
+        while module.gauges.isAnimating && ContinuousClock.now < deadline { try await Task.sleep(for: .milliseconds(20)) }
         #expect(module.face(forSlot: 1) == KeyFace(title: "97%", caption: "5h", meter: KeyMeter(fraction: 0.97, color: AIService.codex.color)))
         #expect(module.face(forSlot: 2).title == "81%")
         #expect(module.face(forSlot: 3) == KeyFace(title: "2", caption: "Resets"))

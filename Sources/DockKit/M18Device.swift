@@ -131,6 +131,17 @@ public final class M18Device: @unchecked Sendable {
         }
     }
 
+    /// Uploads a JPEG for the whole screen (`M18Layout.screenWidth` × `screenHeight`); the keys'
+    /// own images are drawn over it.
+    public func setBackgroundImage(_ jpeg: Data) {
+        perform("set_background_image_stream") { handle in
+            let result = jpeg.withUnsafeBytes { raw in
+                transport_set_background_image_stream(handle, raw.baseAddress!.assumingMemoryBound(to: CChar.self), jpeg.count, 3000)
+            }
+            return result == TRANSPORT_SUCCESS ? transport_refresh(handle) : result
+        }
+    }
+
     public func clearKeys(_ keys: [Int]) {
         guard !keys.isEmpty else { return }
         perform("clear_key") { handle in

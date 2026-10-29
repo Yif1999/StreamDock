@@ -20,7 +20,7 @@ struct GeneralControlsTests {
         var calls = 0
         let module = DisplaySleepModule(hold: Self.hold) { calls += 1; return true }
         module.keyDown(slot: 0)
-        #expect(module.hold.progress == 0 && module.face(forSlot: 0).hold == 0)
+        #expect(module.hold.progress == 0 && module.face(forSlot: 0).hold == .holding(0))
         module.keyUp(slot: 0)
         #expect(module.hold.progress == nil)
         try await Task.sleep(for: Self.pastHold)
@@ -44,7 +44,7 @@ struct GeneralControlsTests {
         module.revealTrack = { reveals += 1 }
         // A tap: the reveal comes on release, nothing quits.
         module.keyDown(slot: 3)
-        #expect(module.face(forSlot: 3).hold == 0)
+        #expect(module.face(forSlot: 3).hold == .holding(0))
         module.keyUp(slot: 3)
         try await eventually { reveals == 1 }
         #expect(reveals == 1 && quits == 0)
@@ -53,7 +53,9 @@ struct GeneralControlsTests {
         try await eventually { quits == 1 }
         module.keyUp(slot: 3)
         #expect(quits == 1 && reveals == 1)
-        #expect(module.face(forSlot: 3).hold == nil)
+        // The hold is over; only its response may still be playing.
+        #expect(module.quitHold.progress == nil)
+        if case .holding = module.face(forSlot: 3).hold { Issue.record("still holding") }
         // Leaving the scene mid-hold cancels without either.
         module.keyDown(slot: 3)
         module.sceneDidDeactivate()
@@ -62,7 +64,7 @@ struct GeneralControlsTests {
         // With Music not running there is nothing to quit: no countdown.
         module.musicRunning = { false }
         module.keyDown(slot: 3)
-        #expect(module.face(forSlot: 3).hold == nil)
+        #expect(module.quitHold.progress == nil)
         module.keyUp(slot: 3)
     }
 

@@ -62,7 +62,7 @@ public final class MediaModule: DockModule {
         }
         if slot == 3 {
             return KeyFace(symbol: "music.note", artwork: cover, caption: cover == nil ? "Music" : nil,
-                           tone: music.track == nil ? .dim : .normal, hold: quitHold.progress)
+                           tone: music.track == nil ? .dim : .normal, hold: quitHold.phase)
         }
         if slot == 4 {
             guard let favorite else { return KeyFace(symbol: "star.fill", caption: "Love", tone: .dim) }
@@ -88,8 +88,10 @@ public final class MediaModule: DockModule {
             guard musicRunning() else { return }
             quitHold.begin(redraw: { [weak self] in self?.context?.setNeedsDisplay() }) { [weak self] in
                 // Held through: quit instead of the tap's reveal.
-                self?.artworkPressed = false
-                self?.quitMusic()
+                guard let self else { return false }
+                self.artworkPressed = false
+                self.quitMusic()
+                return true
             }
         case 4:
             guard let favorite, !favoriteBusy else { return }

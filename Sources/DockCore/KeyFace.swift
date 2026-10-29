@@ -43,6 +43,17 @@ public struct KeyMeter: Hashable, Sendable {
     public init(fraction: Double, color: RGB) { self.fraction = fraction; self.color = color }
 }
 
+/// Where a press-and-hold is (`KeyHold`), as a key draws it.
+public enum HoldPhase: Hashable, Sendable {
+    /// Held: 0 → 1 over the hold.
+    case holding(Double)
+    /// Fired: 0 → 1 over the short response after it.
+    case confirmed(Double)
+    /// Let go before it fired: the ring as it was at `from` (hold progress) slipping back out,
+    /// 0 → 1.
+    case released(from: Double, Double)
+}
+
 /// What one LCD key shows. Modules say what the key is and what state it is in; how that
 /// looks (colors, sizes, grid) is decided once, by `KeyDesign`.
 public struct KeyFace: Hashable, Sendable {
@@ -58,8 +69,8 @@ public struct KeyFace: Hashable, Sendable {
     public var tone: KeyTone
     /// A quota gauge behind the value (the one place a service's own color appears).
     public var meter: KeyMeter?
-    /// Press-and-hold progress, 0...1, while a long-press key is being held (`KeyHold`).
-    public var hold: Double?
+    /// Press-and-hold, while a long-press key is held and just after it fires (`KeyHold`).
+    public var hold: HoldPhase?
 
     public init(
         symbol: String? = nil,
@@ -68,7 +79,7 @@ public struct KeyFace: Hashable, Sendable {
         caption: String? = nil,
         tone: KeyTone = .normal,
         meter: KeyMeter? = nil,
-        hold: Double? = nil
+        hold: HoldPhase? = nil
     ) {
         self.symbol = symbol
         self.artwork = artwork

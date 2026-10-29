@@ -11,6 +11,8 @@ public final class HAModule: DockModule {
     private let hold: KeyHold
     private var holdSlot: Int?
     private var holdBinding: HABinding?
+    /// The key the hold is drawn on: kept after it fires, for the response.
+    private var holdShownSlot: Int?
 
     public convenience init() { self.init(client: .shared) }
     init(client: HAClient, hold: Duration = KeyHold.duration) { self.client = client; self.hold = KeyHold(duration: hold) }
@@ -50,7 +52,7 @@ public final class HAModule: DockModule {
         else if client.successSlot == slot, [.scene, .script].contains(binding.action) { caption = "Sent" }
         // A switch that is on shows its power reading in place of its icon.
         let reading = entity?.state == "on" ? client.meter(for: binding)?.powerText : nil
-        let holding = holdSlot == slot ? hold.progress : nil
+        let holding = holdShownSlot == slot ? hold.phase : nil
         func key(symbol: String? = nil, value: String? = nil, active: Bool = false) -> KeyFace {
             KeyFace(symbol: symbol, title: value, caption: caption, tone: !available ? .dim : active ? .on : .normal, hold: holding)
         }
@@ -92,16 +94,17 @@ public final class HAModule: DockModule {
         if binding.action == .safePower, client.entity(for: binding)?.state == "on" {
             guard client.command(for: binding) != nil, client.busySlot == nil else { return }
             cancelHold()
-            holdSlot = slot; holdBinding = binding
+            holdSlot = slot; holdBinding = binding; holdShownSlot = slot
             hold.begin(redraw: { [weak self] in self?.context?.setNeedsDisplay() }) { [weak self] in
                 guard let self, self.heldKeys.contains(slot), self.holdSlot == slot,
                       self.context?.isVisible != false, self.client.connection == .ready,
                       self.client.bindings[slot] == binding, self.client.entity(for: binding)?.state == "on" else {
                     self?.holdSlot = nil; self?.holdBinding = nil
-                    return
+                    return false
                 }
                 self.holdSlot = nil; self.holdBinding = nil
                 self.client.perform(slot: slot, holdConfirmed: true)
+                return true
             }
         } else { client.perform(slot: slot) }
     }

@@ -11,6 +11,9 @@ public final class AIQuotaModule: DockModule {
     private let client: CPAClient
     private var context: ModuleContext?
     private var icons: [AIService: Data] = [:]
+    /// The gauges glide to a new reading (a cached one replaced by a fresh one, say) instead of
+    /// jumping; keyed by key slot.
+    let gauges = ValueTransitions<Int>()
     /// The clock the countdowns read; tests pin it.
     var now: () -> Date = Date.init
 
@@ -19,6 +22,7 @@ public final class AIQuotaModule: DockModule {
 
     public func attach(_ context: ModuleContext) {
         self.context = context
+        gauges.redraw = { [weak self] in self?.context?.setNeedsDisplay() }
         client.onChange = { [weak self] in self?.context?.setNeedsDisplay() }
     }
     public func sceneDidActivate() { client.start(); context?.setNeedsDisplay() }
@@ -31,8 +35,8 @@ public final class AIQuotaModule: DockModule {
         case (_, 0):
             if let icon = icon(for: service) { return KeyFace(artwork: icon) }
             return KeyFace(symbol: "app.dashed", caption: service.name, tone: .dim)
-        case (_, 1): return meter(quota?.session, label: "5h", service: service)
-        case (_, 2): return meter(quota?.weekly, label: "Week", service: service)
+        case (_, 1): return meter(quota?.session, label: "5h", service: service, slot: slot)
+        case (_, 2): return meter(quota?.weekly, label: "Week", service: service, slot: slot)
         case (.codex, 3): return value(quota?.resetCredits.map(String.init), label: "Resets")
         case (.codex, _): return value(quota.map { $0.credits.map(Self.amount) ?? "0" }, label: "Credits")
         case (.claude, 3): return value(quota?.session.flatMap { countdown(to: $0.resetsAt) }, label: "5h Reset")
@@ -48,10 +52,11 @@ public final class AIQuotaModule: DockModule {
         }
     }
 
-    /// Remaining share as a whole percent, over a fill of the same share.
-    private func meter(_ window: QuotaWindow?, label: String, service: AIService) -> KeyFace {
-        guard let window else { return value(nil, label: label) }
-        let left = window.remaining
+    /// Remaining share as a whole percent, over a fill of the same share; both glide to a new
+    /// reading together (`gauges`).
+    private func meter(_ window: QuotaWindow?, label: String, service: AIService, slot: Int) -> KeyFace {
+        guard let window else { gauges.forget(slot); return value(nil, label: label) }
+        let left = gauges.value(slot, target: window.remaining)
         return KeyFace(title: "\(Int((left * 100).rounded()))%", caption: label,
                        meter: KeyMeter(fraction: left, color: service.color))
     }

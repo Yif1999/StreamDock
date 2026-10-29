@@ -36,7 +36,7 @@ public final class DisplaySleepModule: DockModule {
     public func attach(_ context: ModuleContext) { self.context = context }
 
     public func face(forSlot slot: Int) -> KeyFace {
-        KeyFace(symbol: "moon.fill", caption: failed ? "Failed" : "Sleep", hold: hold.progress)
+        KeyFace(symbol: "moon.fill", caption: failed ? "Failed" : "Sleep", hold: hold.phase)
     }
 
     public func keyDown(slot: Int) {
@@ -44,11 +44,12 @@ public final class DisplaySleepModule: DockModule {
         held = true
         failed = false
         hold.begin(redraw: { [weak self] in self?.context?.setNeedsDisplay() }) { [weak self] in
-            guard let self, self.held else { return }
+            guard let self, self.held else { return false }
             Task {
                 self.failed = !(await self.sleepDisplay())
                 self.context?.setNeedsDisplay()
             }
+            return true
         }
     }
 

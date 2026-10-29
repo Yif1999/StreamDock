@@ -31,6 +31,9 @@ public final class DockController {
     @ObservationIgnored private let light = LightEngine()
     @ObservationIgnored private let monitor = DeviceMonitor()
     @ObservationIgnored private var pressedKeys: Set<Int> = []
+    /// Held keys whose long press has fired: they turn back up at once, though still held, and
+    /// stay up until let go (docs/design.md, 按下与长按).
+    @ObservationIgnored private var firedKeys: Set<Int> = []
     @ObservationIgnored private var shownFaces: [Int: ShownFace] = [:]
     @ObservationIgnored private var started = false
     @ObservationIgnored private var isConnecting = false
@@ -38,8 +41,13 @@ public final class DockController {
 
     private struct ShownFace: Equatable {
         let face: KeyFace
-        let pressed: Bool
+        let press: Double
     }
+    /// How far each key is turned over by a press (`KeyDesign.pressTime`), keyed by key.
+    @ObservationIgnored private lazy var presses = ValueTransitions<Int>(
+        duration: { change in KeyDesign.pressTime * abs(change) },
+        redraw: { [weak self] in self?.redrawAll() }
+    )
 
     public var activeScene: DockScene { scenes[activeSceneIndex] }
 
@@ -260,6 +268,7 @@ public final class DockController {
                 activeScene.keyDown(key)
             } else {
                 guard pressedKeys.remove(key) != nil else { return }
+                firedKeys.remove(key)
                 activeScene.keyUp(key)
             }
             redraw(keys: [key])
@@ -270,6 +279,7 @@ public final class DockController {
     private func releasePressedKeys() {
         let keys = pressedKeys
         pressedKeys.removeAll()
+        firedKeys.removeAll()
         for key in keys.sorted() { activeScene.keyUp(key) }
     }
 
@@ -297,11 +307,11 @@ extension DockController: SceneHost {
         guard !displaysSleeping, let device else { return }
         var images: [Int: Data] = [:]
         for key in keys {
-            let shown = ShownFace(
-                face: activeScene.face(forKey: key),
-                pressed: pressedKeys.contains(key) && activeScene.hasModule(onKey: key)
-            )
-            guard shownFaces[key] != shown, let jpeg = KeyRenderer.jpeg(for: shown.face, pressed: shown.pressed) else { continue }
+            let face = activeScene.face(forKey: key)
+            if case .confirmed = face.hold, pressedKeys.contains(key) { firedKeys.insert(key) }
+            let down = pressedKeys.contains(key) && !firedKeys.contains(key) && activeScene.hasModule(onKey: key)
+            let shown = ShownFace(face: face, press: presses.value(key, target: down ? 1 : 0))
+            guard shownFaces[key] != shown, let jpeg = KeyRenderer.jpeg(for: shown.face, press: shown.press) else { continue }
             shownFaces[key] = shown
             images[key] = jpeg
         }

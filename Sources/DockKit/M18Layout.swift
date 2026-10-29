@@ -22,6 +22,37 @@ public enum M18Layout {
     public static let lcdKeyCount = rows * columns
     public static let roundKeyCount = 3
     public static let keyImageSize = 64
+    /// The key images are windows onto one physical screen this many pixels across.
+    public static let screenWidth = 480, screenHeight = 272
+
+    /// Where the key images sit on that screen (measured 2026-10-29, `dock-probe keywindows`):
+    /// one every `keyPitch` pixels across and down, so `keyGap` (32 px, half a key) of screen lies
+    /// between two images. Of that gap, `windowMargin` on each side shows through the key's window
+    /// as black (the window is about 73 px square, the image centred in it) and the rest is under
+    /// the faceplate. Only the key images can be drawn on (the background between them cannot be
+    /// animated, see docs/design.md), so motion across keys runs on the `keyField` and is cut into
+    /// one 64×64 piece per key; in the gaps it is hidden, as if behind the faceplate.
+    public static let keyPitch = 96
+    public static let keyGap = keyPitch - keyImageSize
+    public static let windowMargin = 4.5
+    /// The whole field of key images, key 1's top-left corner at (0, 0), y down: 448 × 256.
+    public static let keyFieldWidth = (columns - 1) * keyPitch + keyImageSize
+    public static let keyFieldHeight = (rows - 1) * keyPitch + keyImageSize
+
+    /// Top-left corner of LCD key 1–15's image on the key field.
+    public static func keyOrigin(_ key: Int) -> (x: Int, y: Int) {
+        precondition((1...lcdKeyCount).contains(key), "LCD key \(key) out of range")
+        return ((key - 1) % columns * keyPitch, (key - 1) / columns * keyPitch)
+    }
+
+    /// The key whose image covers a point of the key field, if any (nil in the gaps).
+    public static func key(atFieldX x: Double, y: Double) -> Int? {
+        let column = Int((x / Double(keyPitch)).rounded(.down)), row = Int((y / Double(keyPitch)).rounded(.down))
+        guard (0..<columns).contains(column), (0..<rows).contains(row),
+              x - Double(column * keyPitch) < Double(keyImageSize), y - Double(row * keyPitch) < Double(keyImageSize)
+        else { return nil }
+        return row * columns + column + 1
+    }
     public static let ledCount: UInt16 = 24
 
     /// User-confirmed physical order (2026-10-24): 0–10 lower half, 11–21 upper half,

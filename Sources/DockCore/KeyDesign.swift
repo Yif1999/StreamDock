@@ -37,17 +37,54 @@ public enum KeyDesign {
     /// Share of the spare height above a labeled glyph or value (the rest goes below it).
     static let labelLean = 0.75
     static let glyphBox = 36, glyphBoxLabeled = 28
-    static let valueSize = 23.0, valueWidth = 50.0
-    /// A pressed key, whatever it shows, goes this much darker — pressed in, like an iOS button.
-    /// (Lightening would turn the black ground grey and do nothing to a white "on" key.)
-    static let pressedDim = 0.3
-    /// The hold line: this wide, this far in from the edge (so a light key keeps a rim of its
-    /// own color between the line and the black window), from the top middle, clockwise.
-    static let holdWidth = 3, holdInset = 2
+    static let valueSize = 23.0, valueWidth = 50.0, valueBaseline = 40.0
+    /// Touch, in one language (docs/design.md, 按下与长按):
+    /// - A key that acts on a tap turns over when pressed — each ground swaps with the ink on it
+    ///   (black with white ink goes white with black, green with black goes black with green, a
+    ///   meter's fill goes black with ink in its color) — from the edge inward, the part a
+    ///   fingertip leaves in sight.
+    /// - A long-press key does not turn over when pressed: its ring appears from just outside and
+    ///   closes in, then sweeps round; when the hold fires, the key turns over from the ring both
+    ///   ways, out over the rim and in to the middle, and fades back.
+    /// - Artwork (an app icon, an album cover) is the content itself and is never recolored: a
+    ///   press sinks it, shrinking `pressSink` px into a black rim — in step with the ring on a
+    ///   long-press key, since both run on the same clock — and a fired hold springs it back up
+    ///   (`Motion.settle`) while the closed ring fades.
+    /// Pressing, closing in and their reverse all take `pressTime` on `Motion.ease`; `press` is how
+    /// far a tap key is down (0 ... 1), driven by the controller on the same curve.
+    public static let pressTime = 0.2, pressSink = 5.0
+    /// The hold ring: this wide, settling this far in from the edge (so a light key keeps a rim
+    /// of its own color between the ring and the black window), drawn from the top middle,
+    /// clockwise, its head sweeping round at an even pace. It closes in over the first
+    /// `pressTime` of the hold (1 s, `KeyHold.duration`).
+    static let holdWidth = 3.0, holdInset = 2.0, holdCloseIn = pressTime / 1.0
+    /// How far a long-press key has closed in (0 ... 1) at a point of the hold.
+    static func closedIn(_ progress: Double) -> Double { Motion.ease(progress / holdCloseIn) }
+    /// Where the ring's outer edge is at a point of the hold: from just outside the key (out of
+    /// sight) to `holdInset`.
+    static func holdRingInset(_ progress: Double) -> Double {
+        let outside = -holdWidth - 1
+        return holdInset + (outside - holdInset) * (1 - closedIn(progress))
+    }
+    /// How far a fired hold has turned the key over, and how strongly: spreading for the first
+    /// 45 % of the response, fading back over the rest.
+    static func turnOver(_ t: Double) -> (coverage: [Double], opacity: Double) {
+        let spread = Motion.ease(t / 0.45) * Double(side) / 2
+        let outer = max(0, holdInset - spread), inner = min(Double(side) / 2, holdInset + holdWidth + spread)
+        return (ringMask(sweep: 1, inset: outer, width: inner - outer), 1 - Motion.ease((t - 0.45) / 0.55))
+    }
     /// Alpha ramp after downsampling: coverage below `low` drops, above `high` is solid.
     static let edge = (low: 0.12, high: 0.82)
 
-    struct Palette { let tile: RGB?; let glyph: RGB; let label: RGB }
+    struct Palette {
+        let tile: RGB?; let glyph: RGB; let label: RGB
+        /// Ground and ink swapped (a key turned over); the label is the new ink a third of the
+        /// way into the new ground.
+        var swapped: Palette {
+            let ground = glyph, ink = tile ?? .black
+            return Palette(tile: ground, glyph: ink, label: ink.mixed(with: ground, amount: 0.35))
+        }
+    }
     /// Ink over a meter's fill: black glyph, the fill's own color darkened for the label.
     static let meterLabelShade = 0.35
 
@@ -65,52 +102,55 @@ public enum KeyDesign {
     /// Renders a face: artwork edge to edge, or glyph / value with an optional label.
     public static func image(symbol: String? = nil, value: String? = nil, label: String? = nil,
                              tone: KeyTone = .normal, artwork: Data? = nil, meter: KeyMeter? = nil,
-                             hold: Double? = nil, pressed: Bool = false) -> CGImage? {
+                             hold: HoldPhase? = nil, press: Double = 0) -> CGImage? {
         let colors = palette(meter == nil ? tone : .normal)
-        var canvas = Canvas(side: side)
-        canvas.fill(.black)
         if let artwork, let picture = NSImage(data: artwork) {
-            canvas.draw(picture: picture)
-            if pressed { canvas.darken(pressedDim) }
-            if let hold { canvas.traceEdge(hold) }
+            // Sinks with a press, or with the ring on a long press (same clock, so in step).
+            let sunk: Double
+            switch hold {
+            case .holding(let progress): sunk = closedIn(progress)
+            case .released(let from, let t): sunk = closedIn(from) * (1 - Motion.ease(t))
+            // Fired: it springs back up, a little past full size and back (`Motion.settle`).
+            case .confirmed(let t): sunk = 1 - Motion.settle(t)
+            case nil: sunk = min(1, max(0, press))
+            }
+            var canvas = Canvas(side: side)
+            canvas.draw(picture: picture, inset: pressSink * sunk)
+            if let hold { canvas.drawRing(hold, ink: nil) }
             return canvas.image()
         }
-        // A state fills the whole key (the panel's black window frames it).
-        if let tile = colors.tile { canvas.fill(tile) }
-        // A meter fills whole columns from the left; ink takes the color of whatever is under it,
-        // so a value split by the edge reads in two colors (black on the fill, white on black).
-        var split = 0
-        if let meter {
-            split = Int((min(1, max(0, meter.fraction)) * Double(side)).rounded())
-            canvas.fill(meter.color, columns: 0..<split)
-        }
-        func paint(_ coverage: [Double], _ color: RGB, onFill: RGB) {
-            guard split > 0 else { return canvas.composite(coverage, color: color, sharpen: true) }
-            canvas.composite(coverage, color: onFill, sharpen: true, columns: 0..<split)
-            canvas.composite(coverage, color: color, sharpen: true, columns: split..<side)
-        }
-        let meterLabel = meter?.color.scaled(by: meterLabelShade) ?? colors.label
-        // Label first: its ink top bounds the area left for the glyph.
+        // Layout first (the same whatever the colors): the label, then the glyph or value above it.
+        var labelInk: [Double]?
         var contentBottom = side - margin
         if let label {
             let text = textMask(label, size: labelSize, weight: .medium, rounded: false, baseline: labelBaseline,
                                 maxWidth: labelWidth, tracking: labelTracking)
             if let ink = inkBounds(text) {
-                paint(shifted(text, dx: side / 2 - (ink.minX + ink.maxX + 1) / 2, dy: 0), colors.label, onFill: meterLabel)
+                labelInk = shifted(text, dx: side / 2 - (ink.minX + ink.maxX + 1) / 2, dy: 0)
                 contentBottom = ink.minY - labelGap
             }
         }
         let main: [Double]?
+        /// A value sits by its type, not its ink: centered by its advance (tabular figures, so
+        /// every digit is as wide as any other) and placed by its cap height on a fixed baseline,
+        /// so 52 → 55 changes only the digits, never their place.
+        var valueBox: (top: Int, height: Int)?
         if let value {
-            main = textMask(value, size: valueSize, weight: .semibold, rounded: true, baseline: 40, maxWidth: valueWidth, tracking: -0.3)
+            let text = textLayout(value, size: valueSize, weight: .semibold, rounded: true, tabular: true, baseline: valueBaseline,
+                                  maxWidth: valueWidth, tracking: -0.3)
+            main = text.mask
+            let height = Int(text.capHeight.rounded())
+            valueBox = (Int(valueBaseline) - height, height)
         } else if let symbol {
             main = symbolMask(symbol, box: label == nil ? glyphBox : glyphBoxLabeled)
         } else {
             main = nil
         }
+        var mainInk: [Double]?
         if let main, let ink = inkBounds(main) {
-            let dx = side / 2 - (ink.minX + ink.maxX + 1) / 2
-            let height = ink.maxY - ink.minY + 1
+            let dx = valueBox == nil ? side / 2 - (ink.minX + ink.maxX + 1) / 2 : 0
+            let height = valueBox?.height ?? ink.maxY - ink.minY + 1
+            let inkTop = valueBox?.top ?? ink.minY
             let top: Int
             if label != nil {
                 // With a label the two read as one group: the content leans on the label, the
@@ -119,29 +159,79 @@ public enum KeyDesign {
             } else {
                 top = margin + (contentBottom - margin - height) / 2
             }
-            let dy = top - ink.minY
-            paint(shifted(main, dx: dx, dy: dy), colors.glyph, onFill: .black)
+            mainInk = shifted(main, dx: dx, dy: top - inkTop)
         }
-        if pressed { canvas.darken(pressedDim) }
-        if let hold { canvas.traceEdge(hold) }
+        // A meter fills whole columns from the left; ink takes the color of whatever is under it,
+        // so a value split by the edge reads in two colors (black on the fill, white on black).
+        let split = meter.map { Int((min(1, max(0, $0.fraction)) * Double(side)).rounded()) } ?? 0
+        /// The colors of one look: the ground and the ink on it, and the same over a meter's fill.
+        struct Look { let ground: RGB, glyph: RGB, label: RGB, fill: RGB, glyphOnFill: RGB, labelOnFill: RGB }
+        let fill = meter?.color ?? .black
+        let normal = Look(ground: colors.tile ?? .black, glyph: colors.glyph, label: colors.label,
+                          fill: fill, glyphOnFill: .black, labelOnFill: fill.scaled(by: meterLabelShade))
+        func render(_ look: Look) -> Canvas {
+            var canvas = Canvas(side: side)
+            // A state fills the whole key (the panel's black window frames it).
+            canvas.fill(look.ground)
+            if meter != nil { canvas.fill(look.fill, columns: 0..<split) }
+            func paint(_ coverage: [Double], _ color: RGB, onFill: RGB) {
+                guard split > 0 else { return canvas.composite(coverage, color: color, sharpen: true) }
+                canvas.composite(coverage, color: onFill, sharpen: true, columns: 0..<split)
+                canvas.composite(coverage, color: color, sharpen: true, columns: split..<side)
+            }
+            if let labelInk { paint(labelInk, look.label, onFill: look.labelOnFill) }
+            if let mainInk { paint(mainInk, look.glyph, onFill: look.glyphOnFill) }
+            return canvas
+        }
+        let swapped = colors.swapped
+        let turned = Look(ground: swapped.tile ?? .black, glyph: swapped.glyph, label: swapped.label,
+                          fill: .black, glyphOnFill: fill, labelOnFill: fill.mixed(with: .black, amount: 0.35))
+        var canvas = render(normal)
+        switch hold {
+        case .confirmed(let t):
+            let turn = turnOver(t)
+            canvas.blend(render(turned), coverage: turn.coverage, opacity: turn.opacity)
+        case .holding, .released:
+            // The ring is drawn in the key's own ink (black over a fill), the color the key turns
+            // to when it fires.
+            canvas.drawRing(hold!, ink: { i in i % side < split ? normal.glyphOnFill : normal.glyph })
+        case nil where press > 0:
+            // A tap key turns over from the edge inward.
+            let down = min(1, press)
+            canvas.blend(render(turned), coverage: down >= 1 ? nil : ringMask(sweep: 1, inset: 0, width: Double(side) / 2 * down), opacity: 1)
+        case nil:
+            break
+        }
         return canvas.image()
     }
 
-    /// The key's edge band as a clockwise path from the top middle: one entry per step along
-    /// the band's centerline, each the band's cross-section there.
-    static let edgePath: [[Int]] = {
-        let w = holdWidth, o = holdInset, lo = o, hi = side - 1 - o
-        func column(_ x: Int, rows: Range<Int>) -> [Int] { rows.map { $0 * side + x } }
-        func row(_ y: Int, columns: Range<Int>) -> [Int] { columns.map { y * side + $0 } }
-        let top = lo..<(lo + w), bottom = (hi - w + 1)..<(hi + 1), left = lo..<(lo + w), right = (hi - w + 1)..<(hi + 1)
-        var steps: [[Int]] = []
-        for x in (side / 2)...hi { steps.append(column(x, rows: top)) }                                   // top, right half
-        for y in (lo + w)...hi { steps.append(row(y, columns: right)) }                                   // right side, down
-        for x in stride(from: hi - w, through: lo, by: -1) { steps.append(column(x, rows: bottom)) }      // bottom, leftward
-        for y in stride(from: hi - w, through: lo + w, by: -1) { steps.append(row(y, columns: left)) }    // left side, up
-        for x in lo..<(side / 2) { steps.append(column(x, rows: top)) }                                   // top, left half
-        return steps
-    }()
+    /// The hold ring's coverage: a band `width` wide whose outer edge is `inset` in from the key's
+    /// edge (negative: outside it), `sweep` (0...1) of the way round clockwise from the top middle.
+    static func ringMask(sweep: Double, inset: Double, width: Double) -> [Double] {
+        let n = Double(supersample), o = (inset + width / 2) * n, far = Double(side) * n - o, middle = Double(side) * n / 2
+        let corners = [(far, o), (far, far), (o, far), (o, o), (middle, o)]
+        let length = 4 * (far - o)
+        return mask(side) { _ in
+            let path = NSBezierPath()
+            path.lineWidth = width * n
+            path.lineCapStyle = .butt
+            path.lineJoinStyle = .miter
+            if sweep >= 1 {
+                path.appendRect(NSRect(x: o, y: o, width: far - o, height: far - o))
+            } else {
+                var left = max(0, sweep) * length
+                var at = (middle, o)
+                path.move(to: NSPoint(x: at.0, y: at.1))
+                for corner in corners where left > 0 {
+                    let step = hypot(corner.0 - at.0, corner.1 - at.1), f = min(1, left / step)
+                    at = (at.0 + (corner.0 - at.0) * f, at.1 + (corner.1 - at.1) * f)
+                    path.line(to: NSPoint(x: at.0, y: at.1))
+                    left -= step
+                }
+            }
+            path.stroke()
+        }
+    }
 
     // MARK: - Masks (coverage 0...1 at 64×64)
 
@@ -190,13 +280,28 @@ public enum KeyDesign {
     /// `tracking` is extra space between characters, in pixels (small sizes read better looser).
     static func textMask(_ text: String, size: Double, weight: NSFont.Weight, rounded: Bool, baseline: Double,
                          maxWidth: Double, tracking: Double) -> [Double] {
+        textLayout(text, size: size, weight: weight, rounded: rounded, tabular: false, baseline: baseline,
+                   maxWidth: maxWidth, tracking: tracking).mask
+    }
+
+    /// `textMask`, with the cap height of the size it settled on (pixels). `tabular`: every
+    /// figure takes the same width, so a changing number keeps its place.
+    static func textLayout(_ text: String, size: Double, weight: NSFont.Weight, rounded: Bool, tabular: Bool,
+                           baseline: Double, maxWidth: Double, tracking: Double) -> (mask: [Double], capHeight: Double) {
         let n = CGFloat(supersample)
         var fontSize = CGFloat(size)
         var attributed: NSAttributedString
         var font: NSFont
         repeat {
             let base = NSFont.systemFont(ofSize: fontSize * n, weight: weight)
-            font = rounded ? (base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: fontSize * n) } ?? base) : base
+            var descriptor = rounded ? (base.fontDescriptor.withDesign(.rounded) ?? base.fontDescriptor) : base.fontDescriptor
+            if tabular {
+                descriptor = descriptor.addingAttributes([.featureSettings: [[
+                    NSFontDescriptor.FeatureKey.typeIdentifier: kNumberSpacingType,
+                    NSFontDescriptor.FeatureKey.selectorIdentifier: kMonospacedNumbersSelector,
+                ]]])
+            }
+            font = NSFont(descriptor: descriptor, size: fontSize * n) ?? base
             attributed = NSAttributedString(string: text, attributes: [
                 .font: font, .foregroundColor: NSColor.white, .kern: CGFloat(tracking) * n,
             ])
@@ -205,7 +310,7 @@ public enum KeyDesign {
         let x = ((CGFloat(side) * n - attributed.size().width) / 2 / n).rounded() * n
         // In this flipped context a line is drawn from its top: baseline − ascender.
         let y = CGFloat(baseline) * n - font.ascender
-        return mask(side) { _ in attributed.draw(at: NSPoint(x: x, y: y)) }
+        return (mask(side) { _ in attributed.draw(at: NSPoint(x: x, y: y)) }, Double(font.capHeight / n))
     }
 
     /// The pixel rows and columns that carry ink (coverage above a quarter).
@@ -253,23 +358,40 @@ public enum KeyDesign {
             }
         }
 
-        /// Traces `progress` (0...1) of the edge band, each pixel in whichever of white or black
-        /// stands out from what is under it; the leading step is partly drawn, so it glides.
-        mutating func traceEdge(_ progress: Double) {
-            let path = KeyDesign.edgePath
-            let reach = min(1, max(0, progress)) * Double(path.count)
-            for (index, step) in path.enumerated() {
-                let alpha = min(1, max(0, reach - Double(index)))
-                guard alpha > 0 else { break }
-                for i in step {
+        /// The hold ring (`HoldPhase`) in the key's ink at each pixel; on artwork, which has none,
+        /// in whichever of white or black stands out from what is under it.
+        mutating func drawRing(_ phase: HoldPhase, ink: ((Int) -> RGB)?) {
+            let coverage: [Double]
+            switch phase {
+            case .holding(let progress):
+                // Closes in from just outside the key while the head sweeps round.
+                coverage = ringMask(sweep: progress, inset: holdRingInset(progress), width: holdWidth)
+            case .released(let from, let t):
+                // Let go: the ring, as far round as it got, slips back out the way it came.
+                let start = holdRingInset(from), outside = -holdWidth - 1
+                coverage = ringMask(sweep: from, inset: start + (outside - start) * Motion.ease(t), width: holdWidth)
+            case .confirmed(let t):
+                // Only artwork draws this (other keys turn over instead): the closed ring fading.
+                coverage = ringMask(sweep: 1, inset: holdInset, width: holdWidth).map { $0 * (1 - Motion.ease(t)) }
+            }
+            for i in coverage.indices where coverage[i] > 0 {
+                if let ink {
+                    set(i, ink(i), coverage[i])
+                } else {
                     let luminance = 0.2126 * pixels[i * 3] + 0.7152 * pixels[i * 3 + 1] + 0.0722 * pixels[i * 3 + 2]
-                    set(i, luminance > 0.55 ? .black : .white, alpha)
+                    set(i, luminance > 0.55 ? .black : .white, coverage[i])
                 }
             }
         }
 
-        mutating func darken(_ amount: Double) {
-            for i in pixels.indices { pixels[i] *= 1 - amount }
+        /// Takes `other` where `coverage` says (everywhere if nil), at `opacity`.
+        mutating func blend(_ other: Canvas, coverage: [Double]?, opacity: Double) {
+            guard opacity > 0 else { return }
+            for i in 0..<(side * side) {
+                let a = (coverage?[i] ?? 1) * opacity
+                guard a > 0 else { continue }
+                for k in 0..<3 { pixels[i * 3 + k] = pixels[i * 3 + k] * (1 - a) + other.pixels[i * 3 + k] * a }
+            }
         }
 
         private mutating func set(_ i: Int, _ color: RGB, _ alpha: Double) {
@@ -277,7 +399,8 @@ public enum KeyDesign {
             for k in 0..<3 { pixels[i * 3 + k] = pixels[i * 3 + k] * (1 - alpha) + c[k] * alpha }
         }
 
-        mutating func draw(picture: NSImage) {
+        /// The picture filling the key, or `inset` pixels in from every edge (on black).
+        mutating func draw(picture: NSImage, inset: Double = 0) {
             guard let cg = picture.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
             var raw = [UInt8](repeating: 0, count: side * side * 4)
             raw.withUnsafeMutableBytes { buffer in
@@ -286,7 +409,7 @@ public enum KeyDesign {
                 context.interpolationQuality = .high
                 let crop = min(cg.width, cg.height)
                 let square = cg.cropping(to: CGRect(x: (cg.width - crop) / 2, y: (cg.height - crop) / 2, width: crop, height: crop)) ?? cg
-                context.draw(square, in: CGRect(x: 0, y: 0, width: side, height: side))
+                context.draw(square, in: CGRect(x: inset, y: inset, width: Double(side) - 2 * inset, height: Double(side) - 2 * inset))
             }
             for i in 0..<(side * side) {
                 for k in 0..<3 { pixels[i * 3 + k] = Double(raw[i * 4 + k]) / 255 }
