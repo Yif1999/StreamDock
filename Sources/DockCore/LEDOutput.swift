@@ -20,7 +20,7 @@ public struct LightPixel: Sendable {
         level = Double(max(color.red, color.green, color.blue)) / 255
     }
     public static let black = LightPixel(.black)
-    func mixed(with other: LightPixel, amount: Double) -> LightPixel {
+    public func mixed(with other: LightPixel, amount: Double) -> LightPixel {
         let t = min(1, max(0, amount))
         let r = channels.0 * level * (1 - t) + other.channels.0 * other.level * t
         let g = channels.1 * level * (1 - t) + other.channels.1 * other.level * t

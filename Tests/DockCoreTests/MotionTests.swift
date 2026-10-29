@@ -45,4 +45,13 @@ struct MotionTests {
         #expect(next >= 0.5 && next < 0.52)
         #expect(Motion.duration(change: 0.3) > 0.5 && Motion.duration(change: 1) == 0.7)
     }
+
+    @Test func oneFormulaForKeysAndLight() {
+        // The light strip's curve is exactly smoothstep; the keys' is the same formula, steeper.
+        for t in stride(from: 0.0, through: 1, by: 0.05) {
+            #expect(abs(Motion.light.ease(t) - t * t * (3 - 2 * t)) < 1e-6)
+        }
+        #expect(abs(Motion.light.speed(0.5) - 1.5) < 1e-6 && abs(Motion.keys.speed(0.5) - 5) < 1e-6)
+        #expect(abs(Motion.Curve(peak: 2.5).speed(0.5) - 2.5) < 1e-6)
+    }
 }

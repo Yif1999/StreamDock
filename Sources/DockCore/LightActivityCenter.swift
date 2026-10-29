@@ -51,7 +51,7 @@ struct LightBrightness {
     }
     func level(at time: TimeInterval) -> Double {
         let progress = min(1, max(0, (time - started) / Self.duration))
-        let eased = progress * progress * (3 - 2 * progress)
+        let eased = Motion.light.ease(progress)
         return from + (target - from) * eased
     }
     func isAnimating(at time: TimeInterval) -> Bool { time - started < Self.duration }

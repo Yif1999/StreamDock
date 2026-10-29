@@ -186,10 +186,7 @@ public enum AgentLight {
 
     static func wrap(_ x: Double) -> Double { x - x.rounded(.down) }
     static func distance(_ a: Double, _ b: Double) -> Double { abs(wrap(a - b + 0.5) - 0.5) }
-    static func ease(_ x: Double) -> Double {
-        let t = min(1, max(0, x))
-        return t * t * (3 - 2 * t)
-    }
+    static func ease(_ x: Double) -> Double { DockCore.Motion.light.ease(x) }
 
     // MARK: - Painting
 

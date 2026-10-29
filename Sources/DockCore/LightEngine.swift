@@ -118,7 +118,7 @@ final class LightEngine {
         var progress = 0.0
         while progress < 1 {
             progress = min(1, (clock() - start) / duration)
-            let eased = Self.ease(progress)
+            let eased = Motion.light.ease(progress)
             sendFrame?(output.render(from.map { $0.mixed(with: .black, amount: eased) }, gain: shownGain))
             Thread.sleep(forTimeInterval: 1 / LightLayout.framesPerSecond)
         }
@@ -133,10 +133,6 @@ final class LightEngine {
         fadeDuration = max(duration, Self.minimumFade)
         render()
         startTicking()
-    }
-
-    private static func ease(_ progress: Double) -> Double {
-        progress * progress * (3 - 2 * progress)
     }
 
     func stop() {
@@ -186,7 +182,7 @@ final class LightEngine {
         }
         if let from = fadeFrom {
             let progress = min(1, (now - fadeStart) / fadeDuration)
-            let eased = Self.ease(progress)
+            let eased = Motion.light.ease(progress)
             frame = zip(from, frame).map { $0.mixed(with: $1, amount: eased) }
             if progress >= 1 { fadeFrom = nil }
         }
