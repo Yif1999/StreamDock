@@ -146,23 +146,18 @@ public final class CPAClient {
             cpaLog.notice("Account list after \(elapsed(), privacy: .public)")
             guard generation == stamp else { return }
             accounts = CPAAccount.list(list).sorted { $0.id < $1.id }
-            for service in AIService.allCases where wanted.contains(service) {
-                guard let account = account(for: service) else {
-                    quotas[service] = nil; errors[service] = "CPA 中没有 \(service.name) 账号"
-                    continue
-                }
-                do {
-                    let body = try await usage(service, account: account, endpoint: endpoint, key: key)
-                    guard generation == stamp else { return }
-                    quotas[service] = service == .claude ? .claude(body) : .codex(body)
-                    errors[service] = nil
-                    cpaLog.notice("\(service.name, privacy: .public) quota after \(elapsed(), privacy: .public)")
-                } catch {
-                    guard generation == stamp else { return }
-                    errors[service] = error.localizedDescription
-                    cpaLog.error("\(service.name, privacy: .public) quota failed after \(elapsed(), privacy: .public): \(error.localizedDescription, privacy: .public)")
+            // The services' quotas are asked for together: each is a round trip through CPA to its
+            // upstream, and one after the other they took about 1.3 s between them (2026-10-29).
+            await withTaskGroup(of: Void.self) { group in
+                for service in AIService.allCases where wanted.contains(service) {
+                    guard let account = account(for: service) else {
+                        quotas[service] = nil; errors[service] = "CPA 中没有 \(service.name) 账号"
+                        continue
+                    }
+                    group.addTask { await self.query(service, account: account, endpoint: endpoint, key: key, stamp: stamp, began: began) }
                 }
             }
+            guard generation == stamp else { return }
             status = .ready(Date())
         } catch {
             guard generation == stamp else { return }
@@ -170,6 +165,26 @@ public final class CPAClient {
             cpaLog.error("Account list failed after \(elapsed(), privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
         onChange?()
+    }
+
+    /// One service's quota, as part of `refresh` (dropped if a reset came in meanwhile).
+    private func query(_ service: AIService, account: CPAAccount, endpoint: CPAEndpoint, key: String,
+                       stamp: UUID, began: ContinuousClock.Instant) async {
+        func elapsed() -> String {
+            let gap = (ContinuousClock.now - began).components
+            return String(format: "%.2f s", Double(gap.seconds) + Double(gap.attoseconds) / 1e18)
+        }
+        do {
+            let body = try await usage(service, account: account, endpoint: endpoint, key: key)
+            guard generation == stamp else { return }
+            quotas[service] = service == .claude ? .claude(body) : .codex(body)
+            errors[service] = nil
+            cpaLog.notice("\(service.name, privacy: .public) quota after \(elapsed(), privacy: .public)")
+        } catch {
+            guard generation == stamp else { return }
+            errors[service] = error.localizedDescription
+            cpaLog.error("\(service.name, privacy: .public) quota failed after \(elapsed(), privacy: .public): \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     private func usage(_ service: AIService, account: CPAAccount, endpoint: CPAEndpoint, key: String) async throws -> [String: Any] {
