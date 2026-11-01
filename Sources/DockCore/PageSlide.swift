@@ -23,7 +23,7 @@ import DockKit
 /// motion. The user compared none, 180° and 360° on the device and chose 360° (2026-10-29); it
 /// costs 4 ms a frame on average, 9 ms at worst, and about the same bytes as none.
 public struct PageSlide {
-    public static let seconds = 0.3, framesPerSecond = 60.0, shutter = 1.0, lag = 0.015
+    public static let seconds = 0.3, framesPerSecond = 60.0, shutter = 1.0, lag = 0.01
     /// How long one frame's blur spans, in seconds.
     public static var exposure: Double { shutter / framesPerSecond }
 
