@@ -54,11 +54,24 @@ struct KeyFieldTests {
         let black = KeyField().keyImages()
         let slide = PageSlide(leaving: page, arriving: black, toward: (1, 0))
         func greys(_ t: Double) -> Int {
-            let image = slide.frame(at: t, exposure: PageSlide.exposure)[8]!
+            let image = slide.frame(at: t * slide.duration, exposure: PageSlide.exposure)[8]!
             let data = image.dataProvider!.data! as Data
             return (0..<64).filter { x in (1...254).contains(data[32 * image.bytesPerRow + x * 4]) }.count
         }
         // Mid-way the edge is a streak of greys; near the start it barely moves and stays sharp.
-        #expect(greys(0.5) > 8 && greys(0.02) <= 1)
+        #expect(greys(0.4) > 8 && greys(0.02) <= 1)
+    }
+
+    @Test func aPageTurnStartsLineByLineFromTheLeadingEdge() {
+        let page = KeyField().keyImages(), lag = PageSlide.lag
+        // Up: rows, the top first; the arriving page's top row with the leaving page's bottom one.
+        let up = PageSlide(leaving: page, arriving: page, toward: (0, 1))
+        #expect(up.leavingDelays[3] == 0 && up.leavingDelays[8] == lag && up.leavingDelays[13] == 2 * lag)
+        #expect(up.arrivingDelays[1] == 2 * lag && up.arrivingDelays[15] == 4 * lag)
+        #expect(abs(up.duration - (PageSlide.seconds + 4 * lag)) < 1e-9)
+        // Toward the right (pages moving right): columns, the rightmost first.
+        let right = PageSlide(leaving: page, arriving: page, toward: (-1, 0))
+        #expect(right.leavingDelays[5] == 0 && right.leavingDelays[11] == 4 * lag && right.arrivingDelays[15] == 4 * lag)
+        #expect(abs(right.duration - (PageSlide.seconds + 8 * lag)) < 1e-9)
     }
 }

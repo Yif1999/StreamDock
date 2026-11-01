@@ -3,15 +3,14 @@ import Testing
 @testable import DockCore
 
 struct MotionTests {
-    @Test func easeIsSlowAtBothEndsAndFastThroughTheMiddle() {
-        #expect(Motion.ease(0) == 0 && abs(Motion.ease(1) - 1) < 1e-6 && abs(Motion.ease(0.5) - 0.5) < 1e-6)
-        // Symmetric, and monotonic.
-        #expect(abs(Motion.ease(0.2) + Motion.ease(0.8) - 1) < 1e-6)
+    @Test func easeIsSlowAtBothEndsAndFastestAThirdOfTheWay() {
+        #expect(Motion.ease(0) == 0 && abs(Motion.ease(1) - 1) < 1e-6)
         let samples = stride(from: 0.0, through: 1, by: 0.01).map(Motion.ease)
         #expect(zip(samples, samples.dropFirst()).allSatisfy { $0 <= $1 })
-        // The first and last fifth cover little ground; the middle is five times average speed.
-        #expect(Motion.ease(0.2) < 0.06)
-        #expect(abs(Motion.peakSpeed - 5) < 0.01)
+        // Five times average speed at 0.35, nowhere faster; past half way by 0.4.
+        #expect(abs(Motion.speed(0.35) - 5) < 0.01 && Motion.peakSpeed == 5)
+        #expect(stride(from: 0.0, through: 1, by: 0.01).allSatisfy { Motion.speed($0) <= 5.001 })
+        #expect(Motion.ease(0.4) > 0.5 && Motion.ease(0.2) < 0.1)
         #expect(Motion.speed(0.05) < 0.2 && Motion.speed(0.95) < 0.2)
     }
 
@@ -51,7 +50,12 @@ struct MotionTests {
         for t in stride(from: 0.0, through: 1, by: 0.05) {
             #expect(abs(Motion.light.ease(t) - t * t * (3 - 2 * t)) < 1e-6)
         }
-        #expect(abs(Motion.light.speed(0.5) - 1.5) < 1e-6 && abs(Motion.keys.speed(0.5) - 5) < 1e-6)
+        #expect(abs(Motion.light.speed(0.5) - 1.5) < 1e-6 && abs(Motion.keys.speed(0.35) - 5) < 1e-6)
         #expect(abs(Motion.Curve(peak: 2.5).speed(0.5) - 2.5) < 1e-6)
+        // Centred, it is the symmetric curve; moved earlier, the same peak comes sooner.
+        let centred = Motion.Curve(peak: 5)
+        #expect(abs(centred.ease(0.2) + centred.ease(0.8) - 1) < 1e-6 && abs(centred.speed(0.5) - 5) < 1e-6)
+        let early = Motion.Curve(peak: 4, at: 0.4)
+        #expect(abs(early.speed(0.4) - 4) < 1e-4 && early.speed(0.3) < 4 && early.speed(0.5) < 4)
     }
 }

@@ -340,8 +340,8 @@ public final class DockController {
                     self.pageTurn = nil
                     return
                 }
-                let t = min(1, KeyHold.seconds(ContinuousClock.now - start) / PageSlide.seconds)
-                if t >= 1 {
+                let time = KeyHold.seconds(ContinuousClock.now - start)
+                if time >= slide.duration {
                     // The landed page, at full quality.
                     self.pageTurn = nil
                     self.shownFaces = [:]
@@ -349,7 +349,7 @@ public final class DockController {
                     return
                 }
                 var images: [Int: Data] = [:]
-                for (key, image) in slide.frame(at: t, exposure: PageSlide.exposure) {
+                for (key, image) in slide.frame(at: time, exposure: PageSlide.exposure) {
                     guard let jpeg = KeyRenderer.jpeg(image, quality: KeyRenderer.motionQuality), sent[key] != jpeg else { continue }
                     images[key] = jpeg
                     sent[key] = jpeg
