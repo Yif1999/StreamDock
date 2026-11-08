@@ -14,22 +14,22 @@ private let log = Logger(subsystem: "StreamDock", category: "Music")
 public final class MediaModule: DockModule {
     public let keyCount = 5
 
-    private let music = AppleMusic()
-    private let artwork = ArtworkLoader()
+    private let music: AppleMusic
+    private let loadArtwork: (AppleMusic.Track) async -> ArtworkLoader.Artwork?
     private var glow: MusicGlow?
     private let audio = MusicAudioTap()
     private var audioTask: Task<Void, Never>?
     private var audioStopTask: Task<Void, Never>?
     private var lightOffTask: Task<Void, Never>?
     private var visible = false
-    private var paletteTrack: AppleMusic.Track?
+    private(set) var artworkTask: Task<Void, Never>?
     private var context: ModuleContext?
-    private var cover: Data?
+    private var artwork: ArtworkLoader.Artwork?
     private var favorite: AppleMusic.Favorite?
     private var favoriteTask: Task<Void, Never>?
     private var favoriteBusy = false
     private var favoriteFailed = false
-    private var displayedTrack: AppleMusic.Track?
+    private var displayedRevision = 0
     /// Holding the artwork key quits Music.
     let quitHold: KeyHold
     /// The artwork key went down and its tap (reveal) is still due on release.
@@ -40,15 +40,17 @@ public final class MediaModule: DockModule {
     var revealTrack: () -> Void
 
     public convenience init() { self.init(hold: KeyHold.duration) }
-    init(hold: Duration) {
+    init(hold: Duration, music: AppleMusic = AppleMusic(),
+         loadArtwork: ((AppleMusic.Track) async -> ArtworkLoader.Artwork?)? = nil) {
+        self.music = music
+        let loader = ArtworkLoader()
+        self.loadArtwork = loadArtwork ?? { track in
+            await loader.load(for: track) { await music.currentArtwork(for: track) }
+        }
         quitHold = KeyHold(duration: hold)
         musicRunning = { [music] in music.isRunning }
         quitMusic = { [music] in music.quit() }
         revealTrack = { [music] in music.revealCurrentTrack() }
-    }
-
-    public func attach(_ context: ModuleContext) {
-        self.context = context
         music.onChange = { [weak self] in
             self?.trackDidChange()
             self?.context?.setNeedsDisplay()
@@ -56,11 +58,16 @@ public final class MediaModule: DockModule {
         }
     }
 
+    public func attach(_ context: ModuleContext) {
+        self.context = context
+    }
+
     public func face(forSlot slot: Int) -> KeyFace {
         if music.permission == .denied {
             return KeyFace(symbol: symbol(forSlot: slot), caption: slot == 1 ? "Allow" : nil, tone: slot == 1 ? .caution : .dim)
         }
         if slot == 3 {
+            let cover = artwork?.image
             return KeyFace(symbol: "music.note", artwork: cover, caption: cover == nil ? "Music" : nil,
                            tone: music.track == nil ? .dim : .normal, hold: quitHold.phase)
         }
@@ -143,18 +150,33 @@ public final class MediaModule: DockModule {
     }
 
     private func trackDidChange() {
-        guard displayedTrack != music.track else { return }
-        displayedTrack = music.track
-        paletteTrack = nil
-        cover = nil
+        let revision = music.playbackRevision
+        guard displayedRevision != revision else { return }
+        displayedRevision = revision
+        artworkTask?.cancel()
+        artworkTask = nil
+        artwork = nil
         favorite = nil
         favoriteFailed = false
+        guard let track = music.track else { return }
+        setGlowPalette(ArtworkPalette.fallback)
+        artworkTask = Task { [weak self, loadArtwork] in
+            let artwork = await loadArtwork(track)
+            guard let self, self.music.playbackRevision == revision else { return }
+            self.artworkTask = nil
+            self.artwork = artwork
+            if let artwork {
+                self.setGlowPalette(artwork.palette)
+                log.notice("Palette for \(track.artist, privacy: .public) – \(track.album, privacy: .public): \(artwork.palette.map { $0.color.hex }.joined(separator: " "), privacy: .public)")
+            }
+            self.context?.setNeedsDisplay()
+        }
     }
 
     private func refreshFavorite() async {
-        let track = music.track
+        let revision = music.playbackRevision
         let value = await music.favorite()
-        guard track == music.track else { return }
+        guard revision == music.playbackRevision else { return }
         favorite = value
         context?.setNeedsDisplay()
     }
@@ -163,7 +185,7 @@ public final class MediaModule: DockModule {
     private static let airPlayRecheck = 10.0
 
     private func updateGlow() {
-        guard music.state == .playing || music.state == .paused, let track = music.track else {
+        guard music.state == .playing || music.state == .paused, music.track != nil else {
             glow?.playing = false
             scheduleAudioStop()
             if music.state == .paused, music.track != nil {
@@ -179,26 +201,18 @@ public final class MediaModule: DockModule {
         glow?.playing = music.state == .playing
         if visible && music.state == .playing { startAudio() } else { scheduleAudioStop() }
         if let glow { context?.setLight(glow) }
-        guard track != paletteTrack else { return }
-        paletteTrack = track
-        Task {
-            let palette = await artwork.palette(for: track, from: music)
-            log.notice("Palette for \(track.artist, privacy: .public) – \(track.album, privacy: .public): \(palette.map { "\($0.color.hex) \(Int(($0.share * 100).rounded()))%" }.joined(separator: " "), privacy: .public)")
-            guard music.track == track else { return }
-            cover = artwork.image(for: track)
-            context?.setNeedsDisplay()
-            if let glow {
-                glow.setPalette(palette)
-            } else {
-                let glow = MusicGlow(palette: palette)
-                glow.rhythm = { [audio] in
-                    let input = audio.drain()
-                    return audio.hasSignal ? input : nil
-                }
-                glow.playing = music.state == .playing
-                self.glow = glow
+    }
+
+    private func setGlowPalette(_ palette: [Swatch]) {
+        if let glow {
+            glow.setPalette(palette)
+        } else {
+            let glow = MusicGlow(palette: palette)
+            glow.rhythm = { [audio] in
+                let input = audio.drain()
+                return audio.hasSignal ? input : nil
             }
-            if music.state == .playing || music.state == .paused { context?.setLight(glow) }
+            self.glow = glow
         }
     }
 

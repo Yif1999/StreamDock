@@ -1,6 +1,6 @@
 import AppKit
 import Testing
-import DockCore
+@testable import DockCore
 @testable import ControlModules
 
 @MainActor
@@ -121,5 +121,52 @@ struct GeneralControlsTests {
         #expect(cover.width == 64 && cover.height == 64)
         let fallback = try #require(KeyRenderer.jpeg(for: KeyFace(symbol: "music.note", artwork: Data([0, 1]))))
         #expect(!fallback.isEmpty)
+    }
+
+    @Test func lateArtworkCannotReplaceTheCoverOrLightAfterSwitchingBack() async throws {
+        let music = AppleMusic()
+        var requests: [CheckedContinuation<ArtworkLoader.Artwork?, Never>] = []
+        defer { requests.forEach { $0.resume(returning: nil) } }
+        let module = MediaModule(hold: Self.hold, music: music) { _ in
+            await withCheckedContinuation { requests.append($0) }
+        }
+        let scene = DockScene(id: "media-test", name: "Media", defaultLEDColor: .white)
+        scene.place(module, keys: [1, 2, 3, 4, 5])
+        let first = AppleMusic.Track(name: "Title", artist: "Artist", album: "Album", persistentID: "A")
+        let second = AppleMusic.Track(name: "Title", artist: "Artist", album: "Album", persistentID: "B")
+        let oldBytes = try #require(KeyRenderer.jpeg(for: KeyFace(title: "Old", tone: .alert)))
+        let otherBytes = try #require(KeyRenderer.jpeg(for: KeyFace(title: "Other", tone: .dim)))
+        let newBytes = try #require(KeyRenderer.jpeg(for: KeyFace(title: "New", tone: .on)))
+        let oldArtwork = try #require(ArtworkLoader.Artwork(image: oldBytes))
+        let otherArtwork = try #require(ArtworkLoader.Artwork(image: otherBytes))
+        let newArtwork = try #require(ArtworkLoader.Artwork(image: newBytes))
+
+        music.receivePlayerInfo(state: "Playing", track: first)
+        let oldRequest = try #require(module.artworkTask)
+        try await eventually { requests.count == 1 }
+        _ = try #require(requests.count == 1)
+
+        music.receivePlayerInfo(state: "Playing", track: second)
+        let secondRequest = try #require(module.artworkTask)
+        try await eventually { requests.count == 2 }
+        _ = try #require(requests.count == 2)
+        requests.removeLast().resume(returning: otherArtwork)
+        await secondRequest.value
+        #expect(module.face(forSlot: 3).artwork == otherBytes)
+
+        music.receivePlayerInfo(state: "Playing", track: first)
+        #expect(module.face(forSlot: 3).artwork == nil)
+        let newRequest = try #require(module.artworkTask)
+        try await eventually { requests.count == 2 }
+        _ = try #require(requests.count == 2)
+        requests.removeLast().resume(returning: newArtwork)
+        await newRequest.value
+        requests.removeFirst().resume(returning: oldArtwork)
+        await oldRequest.value
+
+        #expect(module.face(forSlot: 3).artwork == newBytes)
+        let glow = try #require(scene.light as? MusicGlow)
+        for tick in 0..<80 { _ = glow.frame(at: Double(tick) / 10, ledCount: 24, input: nil) }
+        #expect(glow.main.color.srgb == MusicGlow(palette: newArtwork.palette).main.color.srgb)
     }
 }

@@ -19,10 +19,49 @@ final class AppleMusic {
         case unknown
     }
 
-    struct Track: Hashable, Sendable {
+    struct Track: Equatable, Sendable {
         let name: String
         let artist: String
         let album: String
+        var persistentID: String? = nil
+        var catalog: CatalogID? = nil
+        var durationMS: Int? = nil
+
+        func matches(_ other: Track) -> Bool {
+            if let id = persistentID, let otherID = other.persistentID, id != otherID { return false }
+            return name == other.name && artist == other.artist && album == other.album
+        }
+    }
+
+    struct CatalogID: Equatable, Sendable {
+        enum Kind { case song, album }
+        let kind: Kind
+        let id: Int
+        let storefront: String?
+
+        /// Music can broadcast either an old iTunes link or a music.apple.com link.
+        init?(storeURL: String) {
+            guard let url = URLComponents(string: storeURL) else { return nil }
+            let path = url.path.split(separator: "/")
+            let storefront = path.first.map(String.init).flatMap { $0.count == 2 ? $0.uppercased() : nil }
+            func query(_ name: String) -> Int? {
+                url.queryItems?.first { $0.name == name }?.value.flatMap(Int.init)
+            }
+            let pathID = path.last.flatMap { Int($0) }
+            if let song = query("i") ?? (path.contains("song") ? pathID : nil), song > 0 {
+                self.init(kind: .song, id: song, storefront: storefront)
+            } else if let album = query("p") ?? (path.contains("album") ? pathID : nil), album > 0 {
+                self.init(kind: .album, id: album, storefront: storefront)
+            } else {
+                return nil
+            }
+        }
+
+        private init(kind: Kind, id: Int, storefront: String?) {
+            self.kind = kind
+            self.id = id
+            self.storefront = storefront
+        }
     }
 
     nonisolated static let bundleID = "com.apple.Music"
@@ -31,27 +70,20 @@ final class AppleMusic {
     private(set) var state: State = .notRunning
     private(set) var permission: Permission = .unknown
     private(set) var track: Track?
-    /// Apple's catalog ID for the playing album (or track), from the notification's store link.
-    /// The same ID works in every storefront, unlike searching by name.
-    private(set) var storeID: String?
+    private(set) var playbackRevision = 0
 
     private let scriptQueue = DispatchQueue(label: "StreamDock.AppleMusic")
     private var observers: [NSObjectProtocol] = []
+    private var stateQueryRevision = 0
 
     func startObserving() {
         guard observers.isEmpty else { return }
         observers.append(DistributedNotificationCenter.default().addObserver(
             forName: Notification.Name("com.apple.Music.playerInfo"), object: nil, queue: .main
         ) { [weak self] note in
-            let info = note.userInfo ?? [:]
-            let playerState = info["Player State"] as? String
-            let storeURL = info["Store URL"] as? String
-            let track = (info["Name"] as? String).map {
-                Track(name: $0, artist: info["Artist"] as? String ?? "", album: info["Album"] as? String ?? "")
-            }
+            guard let event = Self.playerInfo(note.userInfo ?? [:]) else { return }
             MainActor.assumeIsolated {
-                self?.storeID = storeURL.flatMap(Self.catalogID(fromStoreURL:))
-                self?.apply(playerState: playerState, track: track)
+                self?.receivePlayerInfo(state: event.state, track: event.track)
             }
         })
         let workspace = NSWorkspace.shared.notificationCenter
@@ -65,7 +97,36 @@ final class AppleMusic {
         queryState()
     }
 
+    nonisolated static func playerInfo(_ info: [AnyHashable: Any]) -> (state: String, track: Track?)? {
+        guard let playerState = info["Player State"] as? String else { return nil }
+        let storeURL = info["Store URL"] as? String ?? (info["Store URL"] as? URL)?.absoluteString
+        let track = (info["Name"] as? String).map {
+            Track(name: $0, artist: info["Artist"] as? String ?? "", album: info["Album"] as? String ?? "",
+                  persistentID: Self.persistentID(info["PersistentID"]),
+                  catalog: storeURL.flatMap(CatalogID.init(storeURL:)),
+                  durationMS: info["Total Time"] as? Int)
+        }
+        return (playerState, track)
+    }
+
+    func receivePlayerInfo(state: String, track: Track?) {
+        stateQueryRevision += 1
+        // A playing notification without a song or library ID can be another track with the
+        // same tags. Start a fresh request even if its display fields are identical.
+        let unidentified = track.map { $0.persistentID == nil && $0.catalog?.kind != .song } ?? false
+        apply(playerState: state, track: track, newPlayback: state.lowercased() == "playing" && unidentified)
+    }
+
+    private nonisolated static func persistentID(_ value: Any?) -> String? {
+        if let number = value as? NSNumber, number.uint64Value != 0 {
+            return String(format: "%016llX", number.uint64Value)
+        }
+        guard let string = value as? String, let number = UInt64(string, radix: 16), number != 0 else { return nil }
+        return String(format: "%016llX", number)
+    }
+
     func stopObserving() {
+        stateQueryRevision += 1
         observers.forEach { DistributedNotificationCenter.default().removeObserver($0) }
         observers.forEach { NSWorkspace.shared.notificationCenter.removeObserver($0) }
         observers.removeAll()
@@ -136,24 +197,31 @@ final class AppleMusic {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
     }
 
-    /// The current track's artwork as Music stores it (JPEG or PNG), if it has any.
-    /// Returns the data and, on failure, the AppleScript error number for diagnostics.
-    func currentArtwork() async -> (data: Data?, error: Int?) {
-        guard isRunning else { return (nil, nil) }
-        var lastError: Int?
-        // Library tracks answer `raw data`; some streamed tracks only answer `data`.
-        for property in ["raw data", "data"] {
-            let result = await execute("tell application id \"\(Self.bundleID)\" to get \(property) of artwork 1 of current track")
-            if let data = result.data, NSImage(data: data) != nil { return (data, nil) }
-            lastError = result.error
-        }
-        return (nil, lastError)
-    }
-
-    /// "itms://itunes.com/album?p=1440873107&i=1440873109" → the album ID (p), else the track ID (i).
-    private nonisolated static func catalogID(fromStoreURL url: String) -> String? {
-        let items = URLComponents(string: url)?.queryItems ?? []
-        return (items.first { $0.name == "p" } ?? items.first { $0.name == "i" })?.value
+    /// Music can return the previous album's image for a URL track even with the correct
+    /// persistent ID. Read local/library artwork only, using the same track for tags and bytes.
+    func currentArtwork(for track: Track) async -> Data? {
+        guard isRunning, !Task.isCancelled else { return nil }
+        let result = await execute("""
+        tell application id "\(Self.bundleID)"
+            with timeout of 2 seconds
+                set t to current track
+                if class of t is URL track then return missing value
+                set trackID to persistent ID of t
+                set details to {name of t, artist of t, album of t, trackID}
+                try
+                    set pictureBytes to raw data of artwork 1 of t
+                on error
+                    set pictureBytes to data of artwork 1 of t
+                end try
+                if persistent ID of current track is not trackID then return missing value
+                return details & {pictureBytes}
+            end timeout
+        end tell
+        """, binaryItem: 5)
+        let items = result.strings
+        guard items.count == 5, let id = Self.persistentID(items[3]),
+              track.matches(Track(name: items[0], artist: items[1], album: items[2], persistentID: id)) else { return nil }
+        return result.data
     }
 
     var isRunning: Bool {
@@ -167,6 +235,8 @@ final class AppleMusic {
     }
 
     private func queryState() {
+        stateQueryRevision += 1
+        let revision = stateQueryRevision
         guard isRunning else {
             update(state: .notRunning, track: nil)
             return
@@ -177,15 +247,26 @@ final class AppleMusic {
                 set playerState to player state as string
                 try
                     set t to current track
-                    return {playerState, name of t, artist of t, album of t}
+                    set details to {playerState, name of t, artist of t, album of t}
+                    try
+                        set end of details to persistent ID of t
+                    on error
+                        set end of details to ""
+                    end try
+                    try
+                        set end of details to (round ((duration of t) * 1000)) as string
+                    end try
+                    return details
                 on error
                     return {playerState}
                 end try
             end tell
             """)
             let items = result.strings
-            guard !items.isEmpty else { return }
-            let track = items.count >= 4 ? Track(name: items[1], artist: items[2], album: items[3]) : nil
+            guard revision == stateQueryRevision, !items.isEmpty else { return }
+            let track = items.count >= 5 ? Track(name: items[1], artist: items[2], album: items[3],
+                                                 persistentID: Self.persistentID(items[4]),
+                                                 durationMS: items.count > 5 ? Int(items[5]) : nil) : nil
             apply(playerState: items[0], track: track)
         }
     }
@@ -199,18 +280,19 @@ final class AppleMusic {
 
     /// Runs AppleScript off the main thread and records whether Music let us in.
     @discardableResult
-    private func execute(_ source: String) async -> ScriptResult {
+    private func execute(_ source: String, binaryItem: Int? = nil) async -> ScriptResult {
         let result = await withCheckedContinuation { (continuation: CheckedContinuation<ScriptResult, Never>) in
             scriptQueue.async {
                 var error: NSDictionary?
                 var result = ScriptResult()
                 if let descriptor = NSAppleScript(source: source)?.executeAndReturnError(&error) {
-                    if descriptor.numberOfItems > 0 {
-                        result.strings = (1...descriptor.numberOfItems).map { descriptor.atIndex($0)?.stringValue ?? "" }
+                    let count = descriptor.numberOfItems
+                    if count > 0 {
+                        result.strings = (1...count).map { $0 == binaryItem ? "" : descriptor.atIndex($0)?.stringValue ?? "" }
+                        if let binaryItem, binaryItem <= count { result.data = descriptor.atIndex(binaryItem)?.data }
                     } else if let text = descriptor.stringValue {
                         result.strings = [text]
                     }
-                    result.data = descriptor.data
                 }
                 result.error = error?[NSAppleScript.errorNumber] as? Int
                 continuation.resume(returning: result)
@@ -224,18 +306,21 @@ final class AppleMusic {
         return result
     }
 
-    private func apply(playerState: String?, track: Track?) {
+    private func apply(playerState: String?, track: Track?, newPlayback: Bool = false) {
         let newState: State = switch playerState?.lowercased() {
         case "playing": .playing
         case "paused": .paused
         case "stopped": .stopped
         default: isRunning ? .stopped : .notRunning
         }
-        update(state: newState, track: newState == .stopped || newState == .notRunning ? nil : track ?? self.track)
+        update(state: newState, track: newState == .stopped || newState == .notRunning ? nil : track ?? self.track,
+               newPlayback: newPlayback)
     }
 
-    private func update(state: State, track: Track?) {
-        guard state != self.state || track != self.track else { return }
+    private func update(state: State, track: Track?, newPlayback: Bool = false) {
+        let trackChanged = newPlayback || track != self.track
+        guard state != self.state || trackChanged else { return }
+        if trackChanged { playbackRevision += 1 }
         self.state = state
         self.track = track
         onChange?()
